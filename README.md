@@ -17,7 +17,7 @@ A small, simple, and generic worker pool for Go using generics (Go 1.18+). It pr
 ## Installation
 
 ```sh
-go get github.com/utkarsh5026/poolme/pool
+go get github.com/utkarsh5026/poolme
 ```
 
 ## Basic Usage
