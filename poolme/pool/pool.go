@@ -136,10 +136,8 @@ func (wp *WorkerPool[T, R]) Process(
 	results := make([]R, len(tasks))
 	var collectionErr error
 	var collectionWg sync.WaitGroup
-	collectionWg.Add(1)
 
-	go func() {
-		defer collectionWg.Done()
+	collectionWg.Go(func() {
 		for result := range resultChan {
 			if result.Error != nil {
 				collectionErr = result.Error
@@ -149,7 +147,7 @@ func (wp *WorkerPool[T, R]) Process(
 				results[result.Index] = result.Value
 			}
 		}
-	}()
+	})
 
 	// Wait for all workers to complete
 	if err := g.Wait(); err != nil {
