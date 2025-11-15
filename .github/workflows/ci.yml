@@ -56,21 +56,19 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version: '1.25'
         cache: true
+
+    - name: Install golangci-lint
+      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
     - name: Run go vet
       working-directory: ./poolme
       run: go vet ./...
 
     - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@v6
-      with:
-        version: latest
-        working-directory: ./poolme
-        args: --timeout=5m
-        skip-pkg-cache: true
-        skip-build-cache: true
+      working-directory: ./poolme
+      run: golangci-lint run --timeout=5m
 
   build:
     name: Build
