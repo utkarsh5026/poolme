@@ -1,10 +1,14 @@
-Here is a simple and to-the-point README file based on your provided code.
-
----
 
 # poolme
 
 A small, simple, and generic worker pool for Go using generics (Go 1.18+). It provides a straightforward way to manage concurrent task processing.
+
+<div align="center" style="margin-bottom: 1.5em;">
+  <img src="./images/carbon%20(3).png" alt="Worker Pool Example" style="max-width: 90%; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); margin-bottom: 0.5em;" />
+  <br>
+  <span style="display: block; font-size: 1.1em; color: #555; margin-top: 0.5em;"><b>Example: Simple Worker Pool in Action</b></span>
+</div>
+
 
 ## Features
 
