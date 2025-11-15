@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Run tests
+        working-directory: ./poolme
+        run: go test -v -race ./...
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          if [ $(git tag | wc -l) -eq 1 ]; then
+            # First release - get all commits
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            # Get changes since previous tag
+            PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+            else
+              CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+            fi
+          fi
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          release_name: Release ${{ steps.get_version.outputs.VERSION }}
+          body: |
+            ## Changes in ${{ steps.get_version.outputs.VERSION }}
+
+            ${{ steps.changelog.outputs.CHANGELOG }}
+
+            ## Installation
+
+            ```sh
+            go get github.com/utkarsh5026/poolme@${{ steps.get_version.outputs.VERSION }}
+            ```
+          draft: false
+          prerelease: false
