@@ -188,14 +188,14 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 	}
 
 	type keyedTask struct {
-		key  string
 		task T
+		key  string
 	}
 
 	type keyedResult struct {
-		key   string
 		value R
 		err   error
+		key   string
 	}
 
 	// Use errgroup for automatic error propagation
@@ -291,15 +291,15 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 	ctx context.Context,
 	taskChan <-chan T,
 	processFn ProcessFunc[T, R],
-) (<-chan R, <-chan error) {
-	resultChan := make(chan R, wp.taskBuffer)
-	errChan := make(chan error, 1)
+) (resultChan <-chan R, errChan <-chan error) {
+	resChan := make(chan R, wp.taskBuffer)
+	errCh := make(chan error, 1)
 
 	go func() {
-		defer close(resultChan)
-		defer close(errChan)
+		defer close(resChan)
+		defer close(errCh)
 
-		g, ctx := errgroup.WithContext(ctx)
+		g, gctx := errgroup.WithContext(ctx)
 
 		for i := 0; i < wp.workerCount; i++ {
 			g.Go(func() error {
@@ -309,34 +309,34 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 						if !ok {
 							return nil
 						}
-						result, err := wp.processWithRecovery(ctx, task, processFn)
+						result, err := wp.processWithRecovery(gctx, task, processFn)
 						if err != nil {
 							return err
 						}
 						select {
-						case resultChan <- result:
-						case <-ctx.Done():
-							return ctx.Err()
+						case resChan <- result:
+						case <-gctx.Done():
+							return gctx.Err()
 						}
-					case <-ctx.Done():
-						return ctx.Err()
+					case <-gctx.Done():
+						return gctx.Err()
 					}
 				}
 			})
 		}
 
 		if err := g.Wait(); err != nil {
-			errChan <- err
+			errCh <- err
 		}
 	}()
 
-	return resultChan, errChan
+	return resChan, errCh
 }
 
 // indexedTask wraps a task with its original index
 type indexedTask[T any] struct {
-	index int
 	task  T
+	index int
 }
 
 // worker is the core worker function that processes tasks from the task channel.
