@@ -40,8 +40,9 @@ func WithTaskBuffer(size int) WorkerPoolOption {
 
 // WithRetryPolicy sets a retry policy for task processing.
 // maxAttempts specifies the maximum number of attempts for each task.
-// initialDelay specifies the delay before the first retry, subsequent retries
-// will use exponential backoff. If not specified, no retries are performed.
+// initialDelay specifies the delay before the first retry, with subsequent retries
+// using exponential backoff. Set initialDelay to 0 for immediate retries without delay.
+// If not specified, no retries are performed.
 func WithRetryPolicy(maxAttempts int, initialDelay time.Duration) WorkerPoolOption {
 	return func(cfg *workerPoolConfig) {
 		if maxAttempts > 0 {

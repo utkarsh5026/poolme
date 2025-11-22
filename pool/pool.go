@@ -90,7 +90,7 @@ func (wp *WorkerPool[T, R]) Process(
 		defer close(taskChan)
 		for idx, task := range tasks {
 			select {
-			case taskChan <- indexedTask[T]{index: idx, task: retryableTask[T]{task: task, attemptsLeft: wp.maxAttempts}}:
+			case taskChan <- indexedTask[T]{index: idx, task: task}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -154,7 +154,7 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 	}
 
 	type keyedTask struct {
-		task retryableTask[T]
+		task T
 		key  string
 	}
 
@@ -204,7 +204,7 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 		defer close(taskChan)
 		for key, task := range tasks {
 			select {
-			case taskChan <- keyedTask{key: key, task: retryableTask[T]{task: task, attemptsLeft: wp.maxAttempts}}:
+			case taskChan <- keyedTask{key: key, task: task}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -315,7 +315,7 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 				return
 
 			default:
-				retryableTaskChan <- indexedTask[T]{task: retryableTask[T]{task: t, attemptsLeft: wp.maxAttempts}, index: -1}
+				retryableTaskChan <- indexedTask[T]{task: t, index: -1}
 			}
 		}
 	}()
@@ -362,7 +362,7 @@ func (wp *WorkerPool[T, R]) worker(
 // Retries use exponential backoff if initialDelay is configured.
 func (wp *WorkerPool[T, R]) processWithRecovery(
 	ctx context.Context,
-	task retryableTask[T],
+	task T,
 	processFn ProcessFunc[T, R],
 ) (result R, err error) {
 	defer func() {
@@ -385,13 +385,9 @@ func (wp *WorkerPool[T, R]) processWithRecovery(
 			}
 		}
 
-		result, err = processFn(ctx, task.task)
+		result, err = processFn(ctx, task)
 		if err == nil {
 			return result, nil
-		}
-
-		if attempt == maxAttempts-1 {
-			return result, err
 		}
 	}
 
