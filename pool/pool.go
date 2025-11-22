@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -17,16 +18,20 @@ import (
 //   - T: The input task type
 //   - R: The result type
 type WorkerPool[T any, R any] struct {
-	workerCount int
-	taskBuffer  int
+	workerCount  int
+	taskBuffer   int
+	maxAttempts  int
+	initialDelay time.Duration
 }
 
 // NewWorkerPool creates a new worker pool with the given options.
 // Default configuration: workers = GOMAXPROCS, buffer = worker count.
 func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 	cfg := &workerPoolConfig{
-		workerCount: runtime.GOMAXPROCS(0),
-		taskBuffer:  0, // Will be set to workerCount if not specified
+		workerCount:  runtime.GOMAXPROCS(0),
+		taskBuffer:   0, // Will be set to workerCount if not specified
+		maxAttempts:  1,
+		initialDelay: 0,
 	}
 
 	for _, opt := range opts {
@@ -38,20 +43,11 @@ func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 	}
 
 	return &WorkerPool[T, R]{
-		workerCount: cfg.workerCount,
-		taskBuffer:  cfg.taskBuffer,
+		workerCount:  cfg.workerCount,
+		taskBuffer:   cfg.taskBuffer,
+		maxAttempts:  cfg.maxAttempts,
+		initialDelay: cfg.initialDelay,
 	}
-}
-
-// ProcessFunc is a function that processes a single task and returns a result.
-// If an error is returned, the worker pool will collect it and stop processing.
-type ProcessFunc[T any, R any] func(ctx context.Context, task T) (R, error)
-
-// Result represents the outcome of processing a task.
-type Result[R any] struct {
-	Value R
-	Error error
-	Index int // Original index of the task (if tasks were provided as a slice)
 }
 
 // Process executes tasks concurrently using a pool of workers.
@@ -75,14 +71,11 @@ func (wp *WorkerPool[T, R]) Process(
 		return []R{}, nil
 	}
 
-	// Use errgroup for automatic error propagation and context cancellation
 	g, ctx := errgroup.WithContext(ctx)
 
-	// Create buffered channels for tasks and results
 	taskChan := make(chan indexedTask[T], wp.taskBuffer)
 	resultChan := make(chan Result[R], len(tasks))
 
-	// Start workers
 	numWorkers := min(wp.workerCount, len(tasks))
 	for range numWorkers {
 		g.Go(func() error {
@@ -90,12 +83,11 @@ func (wp *WorkerPool[T, R]) Process(
 		})
 	}
 
-	// Send tasks asynchronously
 	g.Go(func() error {
 		defer close(taskChan)
 		for idx, task := range tasks {
 			select {
-			case taskChan <- indexedTask[T]{index: idx, task: task}:
+			case taskChan <- indexedTask[T]{index: idx, task: retryableTask[T]{task: task, attemptsLeft: wp.maxAttempts}}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -159,7 +151,7 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 	}
 
 	type keyedTask struct {
-		task T
+		task retryableTask[T]
 		key  string
 	}
 
@@ -178,7 +170,7 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 
 	// Start workers
 	numWorkers := min(wp.workerCount, len(tasks))
-	for i := 0; i < numWorkers; i++ {
+	for range numWorkers {
 		g.Go(func() error {
 			for {
 				select {
@@ -204,7 +196,7 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 		defer close(taskChan)
 		for key, task := range tasks {
 			select {
-			case taskChan <- keyedTask{key: key, task: task}:
+			case taskChan <- keyedTask{key: key, task: retryableTask[T]{task: task, attemptsLeft: wp.maxAttempts}}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -265,6 +257,7 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 ) (resultChan <-chan R, errChan <-chan error) {
 	resChan := make(chan R, wp.taskBuffer)
 	errCh := make(chan error, 1)
+	retryableTaskChan := make(chan indexedTask[T], wp.taskBuffer)
 
 	go func() {
 		defer close(resChan)
@@ -276,11 +269,11 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 			g.Go(func() error {
 				for {
 					select {
-					case task, ok := <-taskChan:
+					case task, ok := <-retryableTaskChan:
 						if !ok {
 							return nil
 						}
-						result, err := wp.processWithRecovery(gctx, task, processFn)
+						result, err := wp.processWithRecovery(gctx, task.task, processFn)
 						if err != nil {
 							return err
 						}
@@ -301,13 +294,20 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 		}
 	}()
 
-	return resChan, errCh
-}
+	go func() {
+		defer close(retryableTaskChan)
+		for t := range taskChan {
+			select {
+			case <-ctx.Done():
+				return
 
-// indexedTask wraps a task with its original index
-type indexedTask[T any] struct {
-	task  T
-	index int
+			default:
+				retryableTaskChan <- indexedTask[T]{task: retryableTask[T]{task: t, attemptsLeft: wp.maxAttempts}, index: -1}
+			}
+		}
+	}()
+
+	return resChan, errCh
 }
 
 // worker is the core worker function that processes tasks from the task channel.
@@ -339,11 +339,12 @@ func (wp *WorkerPool[T, R]) worker(
 	}
 }
 
-// processWithRecovery executes a task with panic recovery.
+// processWithRecovery executes a task with panic recovery and retry logic.
 // If a panic occurs, it's converted to an error to prevent crashing the worker.
+// Retries use exponential backoff if initialDelay is configured.
 func (wp *WorkerPool[T, R]) processWithRecovery(
 	ctx context.Context,
-	task T,
+	task retryableTask[T],
 	processFn ProcessFunc[T, R],
 ) (result R, err error) {
 	defer func() {
@@ -354,5 +355,27 @@ func (wp *WorkerPool[T, R]) processWithRecovery(
 		}
 	}()
 
-	return processFn(ctx, task)
+	maxAttempts := max(wp.maxAttempts, 1)
+
+	for attempt := range maxAttempts {
+		if attempt > 0 && wp.initialDelay > 0 {
+			backoffDelay := calcBackoffDelay(wp.initialDelay, attempt-1)
+			select {
+			case <-time.After(backoffDelay):
+			case <-ctx.Done():
+				return result, ctx.Err()
+			}
+		}
+
+		result, err = processFn(ctx, task.task)
+		if err == nil {
+			return result, nil
+		}
+
+		if attempt == maxAttempts-1 {
+			return result, err
+		}
+	}
+
+	return result, err
 }
