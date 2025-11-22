@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 // WorkerPool is a generic, production-ready worker pool implementation.
@@ -22,6 +23,7 @@ type WorkerPool[T any, R any] struct {
 	taskBuffer   int
 	maxAttempts  int
 	initialDelay time.Duration
+	rateLimiter  *rate.Limiter
 }
 
 // NewWorkerPool creates a new worker pool with the given options.
@@ -47,6 +49,7 @@ func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 		taskBuffer:   cfg.taskBuffer,
 		maxAttempts:  cfg.maxAttempts,
 		initialDelay: cfg.initialDelay,
+		rateLimiter:  cfg.rateLimiter,
 	}
 }
 
@@ -178,6 +181,11 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 					if !ok {
 						return nil
 					}
+					if wp.rateLimiter != nil {
+						if err := wp.rateLimiter.Wait(ctx); err != nil {
+							return err
+						}
+					}
 					result, err := wp.processWithRecovery(ctx, task.task, processFn)
 					select {
 					case resultChan <- keyedResult{key: task.key, value: result, err: err}:
@@ -273,6 +281,11 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 						if !ok {
 							return nil
 						}
+						if wp.rateLimiter != nil {
+							if err := wp.rateLimiter.Wait(gctx); err != nil {
+								return err
+							}
+						}
 						result, err := wp.processWithRecovery(gctx, task.task, processFn)
 						if err != nil {
 							return err
@@ -323,6 +336,11 @@ func (wp *WorkerPool[T, R]) worker(
 		case task, ok := <-taskChan:
 			if !ok {
 				return nil
+			}
+			if wp.rateLimiter != nil {
+				if err := wp.rateLimiter.Wait(ctx); err != nil {
+					return err
+				}
 			}
 			result, err := wp.processWithRecovery(ctx, task.task, processFn)
 			select {
