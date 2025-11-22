@@ -25,22 +25,19 @@ jobs:
           cache: true
 
       - name: Download dependencies
-        working-directory: ./poolme
         run: go mod download
 
       - name: Verify dependencies
-        working-directory: ./poolme
         run: go mod verify
 
       - name: Run tests
-        working-directory: ./poolme
         run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage to Codecov
         if: matrix.go-version == '1.25'
         uses: codecov/codecov-action@v4
         with:
-          file: ./poolme/coverage.out
+          file: ./coverage.out
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: false
@@ -63,11 +60,9 @@ jobs:
         run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
       - name: Run go vet
-        working-directory: ./poolme
         run: go vet ./...
 
       - name: Run golangci-lint
-        working-directory: ./poolme
         run: golangci-lint run --timeout=5m
 
   build:
@@ -85,5 +80,4 @@ jobs:
           cache: true
 
       - name: Build
-        working-directory: ./poolme
         run: go build -v ./...

@@ -26,7 +26,6 @@ jobs:
           cache: true
 
       - name: Run tests
-        working-directory: ./poolme
         run: go test -v -race ./...
 
       - name: Get version from tag
