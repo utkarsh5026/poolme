@@ -22,7 +22,35 @@ type ProcessFunc[T any, R any] func(ctx context.Context, task T) (R, error)
 //   - Error: Any error that occurred during task processing (nil if successful)
 //   - Index: The original position of the task in the input slice, useful for maintaining order
 type Result[R any] struct {
-	Value R
-	Error error
-	Index int // Original index of the task (if tasks were provided as a slice)
+	Value R     // The result value produced by processing the task
+	Error error // Error encountered during processing, nil if successful
+	Index int   // Original index of the task in the input slice
+}
+
+// retryableTask wraps a task with retry attempt tracking.
+// It maintains the original task and the number of retry attempts remaining.
+//
+// Type parameters:
+//   - T: The type of the task being wrapped
+//
+// Fields:
+//   - task: The original task to be processed
+//   - attemptsLeft: Number of retry attempts remaining for this task
+type retryableTask[T any] struct {
+	task         T   // The original task to be processed
+	attemptsLeft int // Number of retry attempts remaining for this task
+}
+
+// indexedTask wraps a task with its original index for result ordering.
+// It combines retry logic with index tracking to maintain task order in results.
+//
+// Type parameters:
+//   - T: The type of the task being wrapped
+//
+// Fields:
+//   - task: The retryable task wrapper containing the original task and retry attempts
+//   - index: The original position of the task in the input slice
+type indexedTask[T any] struct {
+	task  retryableTask[T] // The retryable task wrapper
+	index int              // Original index in the input slice
 }
