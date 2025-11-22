@@ -21,35 +21,6 @@ type WorkerPool[T any, R any] struct {
 	taskBuffer  int
 }
 
-// WorkerPoolOption is a functional option for configuring the worker pool.
-type WorkerPoolOption func(*workerPoolConfig)
-
-type workerPoolConfig struct {
-	workerCount int
-	taskBuffer  int
-}
-
-// WithWorkerCount sets the number of concurrent workers.
-// If not specified, defaults to runtime.GOMAXPROCS(0).
-func WithWorkerCount(count int) WorkerPoolOption {
-	return func(cfg *workerPoolConfig) {
-		if count > 0 {
-			cfg.workerCount = count
-		}
-	}
-}
-
-// WithTaskBuffer sets the buffer size for the task channel.
-// A larger buffer can improve throughput but uses more memory.
-// If not specified, defaults to the number of workers.
-func WithTaskBuffer(size int) WorkerPoolOption {
-	return func(cfg *workerPoolConfig) {
-		if size >= 0 {
-			cfg.taskBuffer = size
-		}
-	}
-}
-
 // NewWorkerPool creates a new worker pool with the given options.
 // Default configuration: workers = GOMAXPROCS, buffer = worker count.
 func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
