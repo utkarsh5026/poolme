@@ -24,21 +24,8 @@ func worker[T any, R any, K comparable](
 				return nil
 			}
 
-			if wp.rateLimiter != nil {
-				if err := wp.rateLimiter.Wait(ctx); err != nil {
-					return err
-				}
-			}
-
 			actualTask := t.Task()
-			if wp.beforeTaskStart != nil {
-				wp.beforeTaskStart(actualTask)
-			}
-
-			result, err := processWithRecovery(ctx, wp, actualTask, processFn)
-			if wp.onTaskEnd != nil {
-				wp.onTaskEnd(actualTask, result, err)
-			}
+			result, err := executeTask(ctx, wp, actualTask, processFn)
 
 			select {
 			case resultChan <- Result[R, K]{Value: result, Error: err, Key: t.Key()}:
@@ -52,6 +39,35 @@ func worker[T any, R any, K comparable](
 			return ctx.Err()
 		}
 	}
+}
+
+// executeTask encapsulates the common logic for executing a task with hooks, rate limiting, and processing.
+// This function is used by both worker and runSubmitWorker to avoid code duplication.
+// It handles rate limiting, hook execution (beforeTaskStart and onTaskEnd), and task processing with retry.
+func executeTask[T, R any](
+	ctx context.Context,
+	wp *WorkerPool[T, R],
+	task T,
+	processFn ProcessFunc[T, R],
+) (R, error) {
+	if wp.rateLimiter != nil {
+		if err := wp.rateLimiter.Wait(ctx); err != nil {
+			var zero R
+			return zero, err
+		}
+	}
+
+	if wp.beforeTaskStart != nil {
+		wp.beforeTaskStart(task)
+	}
+
+	result, err := processWithRecovery(ctx, wp, task, processFn)
+
+	if wp.onTaskEnd != nil {
+		wp.onTaskEnd(task, result, err)
+	}
+
+	return result, err
 }
 
 // processWithRecovery executes a task with panic recovery and retry logic.
@@ -71,13 +87,34 @@ func processWithRecovery[T, R any](
 		}
 	}()
 
-	maxAttempts := max(wp.maxAttempts, 1)
+	return processWithRetry(ctx, task, wp, processFn)
+}
 
+// processWithRetry executes the given processFn for the task, retrying up to wp.maxAttempts times on error.
+// It uses exponential backoff with an initial delay of wp.initialDelay between retries (if initialDelay > 0).
+// If wp.onRetry is set, it is called before each retry (i.e., on every failure except the last).
+// The function will respect context cancellation and abort early if the context is done.
+// On success, it returns the result and nil error; otherwise, the final error is returned (after retries).
+func processWithRetry[T, R any](
+	ctx context.Context,
+	task T,
+	wp *WorkerPool[T, R],
+	processFn ProcessFunc[T, R],
+) (R, error) {
+	var result R
+	var err error
+	maxAttempts := max(wp.maxAttempts, 1)
 	for attempt := range maxAttempts {
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		default:
+		}
+
 		if attempt > 0 && wp.initialDelay > 0 {
-			backoffDelay := calcBackoffDelay(wp.initialDelay, attempt-1)
+			delay := calcBackoffDelay(wp.initialDelay, attempt-1)
 			select {
-			case <-time.After(backoffDelay):
+			case <-time.After(delay):
 			case <-ctx.Done():
 				return result, ctx.Err()
 			}
