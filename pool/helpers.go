@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"time"
@@ -23,7 +22,32 @@ func calcBackoffDelay(initialDelay time.Duration, attemptNumber int) time.Durati
 	return time.Duration(float64(initialDelay) * backoffFactor)
 }
 
-func checkfuncs[T any, R any](cfg *workerPoolConfig, expectedTaskType, expectedResultType string) (beforeTaskStart func(T), onTaskEnd func(T, R, error), onRetry func(T, int, error)) {
+// checkfuncs validates user-supplied hook functions against expected type signatures and returns
+// safe wrapper functions for use within the worker pool. This ensures that user-provided hooks for
+// task start, task end, and retry events match the types of tasks and results configured for the pool.
+//
+// Parameters:
+//   - cfg: The worker pool configuration struct containing optional hook function fields and their type records.
+//   - expectedTaskType: String representation of the expected task type (as computed by fmt.Sprintf("%T", ...)).
+//   - expectedResultType: String representation of the expected result type.
+//
+// Returns:
+//   - beforeTaskStart: Function to be called before each task starts (or nil if not configured).
+//   - onTaskEnd: Function to be called after each task ends (or nil if not configured).
+//   - onRetry: Function to be called on every retry attempt (or nil if not configured).
+//
+// Panics:
+//
+//	If any user-supplied hook function's type does not match the expected task/result types.
+//	The panic message describes the type mismatch reason.
+func checkfuncs[T any, R any](
+	cfg *workerPoolConfig,
+	expectedTaskType, expectedResultType string,
+) (
+	beforeTaskStart func(T),
+	onTaskEnd func(T, R, error),
+	onRetry func(T, int, error),
+) {
 	if cfg.beforeTaskStart != nil {
 		if cfg.beforeTaskStartType != expectedTaskType {
 			panic(fmt.Sprintf("WithBeforeTaskStart hook expects task type %s, but pool processes type %s",
@@ -59,19 +83,4 @@ func checkfuncs[T any, R any](cfg *workerPoolConfig, expectedTaskType, expectedR
 	}
 
 	return beforeTaskStart, onTaskEnd, onRetry
-}
-
-// produceFromChannel produces tasks from an input channel and sends them to taskChan.
-// It wraps each task with a dummy index (-1) and handles context cancellation.
-// The channel is closed when the input channel is closed or context is cancelled.
-func produceFromChannel[T any](ctx context.Context, taskChan chan<- task[T, int], inputChan <-chan T) {
-	defer close(taskChan)
-	for t := range inputChan {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			taskChan <- &indexedTask[T]{task: t, index: -1}
-		}
-	}
 }
