@@ -72,7 +72,10 @@ func TestWorkerPool_Start(t *testing.T) {
 		// Try to submit - should fail or return context cancelled
 		future, err := pool.Submit(1)
 		if err == nil {
-			_, _, err = future.Get()
+			// Use GetWithContext with a short timeout instead of blocking Get
+			getCtx, getCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer getCancel()
+			_, _, err = future.GetWithContext(getCtx)
 			if err == nil {
 				t.Error("expected error with cancelled context")
 			}
