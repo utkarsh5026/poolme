@@ -428,12 +428,27 @@ pool.WithOnTaskEnd(func(task int, result string, err error) {
 
 ---
 
-## Performance Considerations
+## Performance
 
-- **Buffer Size**: Larger buffers reduce contention but use more memory
-- **Worker Count**: More workers don't always mean better performance
-- **Rate Limiting**: Adds overhead; only use when necessary
-- **Hooks**: Minimal overhead when not configured; keep hook logic fast
+### Benchmark Results
+
+Tested on Intel i7-11800H @ 2.30GHz (16 cores):
+
+| Metric | Result |
+|--------|--------|
+| **Peak Throughput** | ~1M tasks/sec (simple CPU tasks) |
+| **Worker Efficiency** | 400-500K tasks/sec/worker (2-4 workers) |
+| **Memory per Task** | ~65 bytes |
+| **Parallel Speedup** | 19x vs sequential (1000 tasks) |
+
+**Key Findings:**
+- Buffer size 4-8x worker count provides ~30% throughput boost
+- Optimal worker count: 8-16 for CPU-bound, 24-48 for I/O-bound tasks
+- Minimal overhead: ~5% with hooks, ~1 allocation per task
+
+Run benchmarks: `go test -bench=BenchmarkComprehensive -benchmem ./pool/`
+
+See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance analysis and tuning guide.
 
 ---
 
