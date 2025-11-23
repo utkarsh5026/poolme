@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"fmt"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -15,6 +16,15 @@ type workerPoolConfig struct {
 	maxAttempts  int
 	initialDelay time.Duration
 	rateLimiter  *rate.Limiter
+
+	// Hook functions stored as any for flexibility
+	beforeTaskStart     func(any)
+	beforeTaskStartType string
+	onTaskEnd           func(any, any, error)
+	onTaskEndTaskType   string
+	onTaskEndResultType string
+	onRetry             func(any, int, error)
+	onRetryType         string
 }
 
 // WithWorkerCount sets the number of concurrent workers.
@@ -70,4 +80,102 @@ func WithRateLimit(tasksPerSecond float64, burst int) WorkerPoolOption {
 			cfg.rateLimiter = rate.NewLimiter(rate.Limit(tasksPerSecond), burst)
 		}
 	}
+}
+
+// WithBeforeTaskStart sets a hook that is called before each task starts processing.
+// The hook receives the task being processed.
+// Hook must be thread-safe as it may be called concurrently by multiple workers.
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithBeforeTaskStart(func(task int) {
+//	        log.Printf("Starting task: %d", task)
+//	    }),
+//	)
+func WithBeforeTaskStart[T any](startFunc func(task T)) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		if startFunc == nil {
+			return
+		}
+		cfg.beforeTaskStart = func(task any) {
+			if t, ok := task.(T); ok {
+				startFunc(t)
+			}
+		}
+		var zero T
+		cfg.beforeTaskStartType = getTypeName(zero)
+	}
+}
+
+// WithOnTaskEnd sets a hook that is called after each task completes processing.
+// The hook receives the task, result, and any error that occurred.
+// Hook must be thread-safe as it may be called concurrently by multiple workers.
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithOnTaskEnd(func(task int, result string, err error) {
+//	        if err != nil {
+//	            log.Printf("Task %d failed: %v", task, err)
+//	        } else {
+//	            log.Printf("Task %d completed: %s", task, result)
+//	        }
+//	    }),
+//	)
+func WithOnTaskEnd[T any, R any](endFunc func(task T, result R, err error)) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		if endFunc == nil {
+			return
+		}
+		cfg.onTaskEnd = func(task any, result any, err error) {
+			var r R
+			if result != nil {
+				if converted, ok := result.(R); ok {
+					r = converted
+				}
+			}
+			if t, ok := task.(T); ok {
+				endFunc(t, r, err)
+			}
+		}
+		var zeroT T
+		var zeroR R
+		cfg.onTaskEndTaskType = getTypeName(zeroT)
+		cfg.onTaskEndResultType = getTypeName(zeroR)
+	}
+}
+
+// WithOnEachAttempt sets a hook that is called after each retry attempt.
+// The hook receives the task, attempt number (1-based), and the error that caused the retry.
+// This is only called when retry policy is configured and a task fails.
+// Hook must be thread-safe as it may be called concurrently by multiple workers.
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithRetryPolicy(3, 100*time.Millisecond),
+//	    WithOnEachAttempt(func(task int, attempt int, err error) {
+//	        log.Printf("Task %d attempt %d failed: %v", task, attempt, err)
+//	    }),
+//	)
+func WithOnEachAttempt[T any](attemptFunc func(task T, attempt int, err error)) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		if attemptFunc == nil {
+			return
+		}
+		cfg.onRetry = func(task any, attempt int, err error) {
+			if t, ok := task.(T); ok {
+				attemptFunc(t, attempt, err)
+			}
+		}
+		var zero T
+		cfg.onRetryType = getTypeName(zero)
+	}
+}
+
+// getTypeName returns a string representation of the type for validation.
+// This uses fmt.Sprintf with %T which is sufficient for type checking.
+func getTypeName(v any) string {
+	return fmt.Sprintf("%T", v)
 }

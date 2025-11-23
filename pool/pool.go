@@ -24,6 +24,10 @@ type WorkerPool[T any, R any] struct {
 	maxAttempts  int
 	initialDelay time.Duration
 	rateLimiter  *rate.Limiter
+
+	beforeTaskStart func(T)
+	onTaskEnd       func(T, R, error)
+	onRetry         func(T, int, error)
 }
 
 // NewWorkerPool creates a new worker pool with the given options.
@@ -44,12 +48,22 @@ func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 		cfg.taskBuffer = cfg.workerCount
 	}
 
+	var zeroT T
+	var zeroR R
+	expectedTaskType := fmt.Sprintf("%T", zeroT)
+	expectedResultType := fmt.Sprintf("%T", zeroR)
+
+	beforeTaskStart, onTaskEnd, onRetry := checkfuncs[T, R](cfg, expectedTaskType, expectedResultType)
+
 	return &WorkerPool[T, R]{
-		workerCount:  cfg.workerCount,
-		taskBuffer:   cfg.taskBuffer,
-		maxAttempts:  cfg.maxAttempts,
-		initialDelay: cfg.initialDelay,
-		rateLimiter:  cfg.rateLimiter,
+		workerCount:     cfg.workerCount,
+		taskBuffer:      cfg.taskBuffer,
+		maxAttempts:     cfg.maxAttempts,
+		initialDelay:    cfg.initialDelay,
+		rateLimiter:     cfg.rateLimiter,
+		beforeTaskStart: beforeTaskStart,
+		onTaskEnd:       onTaskEnd,
+		onRetry:         onRetry,
 	}
 }
 
@@ -186,11 +200,20 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 							return err
 						}
 					}
+					if wp.beforeTaskStart != nil {
+						wp.beforeTaskStart(task.task)
+					}
 					result, err := wp.processWithRecovery(ctx, task.task, processFn)
+					if wp.onTaskEnd != nil {
+						wp.onTaskEnd(task.task, result, err)
+					}
 					select {
 					case resultChan <- keyedResult{key: task.key, value: result, err: err}:
 					case <-ctx.Done():
 						return ctx.Err()
+					}
+					if err != nil {
+						return err // Stop on first error
 					}
 				case <-ctx.Done():
 					return ctx.Err()
@@ -286,7 +309,13 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 								return err
 							}
 						}
+						if wp.beforeTaskStart != nil {
+							wp.beforeTaskStart(task.task)
+						}
 						result, err := wp.processWithRecovery(gctx, task.task, processFn)
+						if wp.onTaskEnd != nil {
+							wp.onTaskEnd(task.task, result, err)
+						}
 						if err != nil {
 							return err
 						}
@@ -342,7 +371,13 @@ func (wp *WorkerPool[T, R]) worker(
 					return err
 				}
 			}
+			if wp.beforeTaskStart != nil {
+				wp.beforeTaskStart(task.task)
+			}
 			result, err := wp.processWithRecovery(ctx, task.task, processFn)
+			if wp.onTaskEnd != nil {
+				wp.onTaskEnd(task.task, result, err)
+			}
 			select {
 			case resultChan <- Result[R]{Value: result, Error: err, Index: task.index}:
 			case <-ctx.Done():
@@ -388,6 +423,10 @@ func (wp *WorkerPool[T, R]) processWithRecovery(
 		result, err = processFn(ctx, task)
 		if err == nil {
 			return result, nil
+		}
+
+		if wp.onRetry != nil && attempt < maxAttempts-1 {
+			wp.onRetry(task, attempt+1, err)
 		}
 	}
 
