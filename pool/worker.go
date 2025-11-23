@@ -24,21 +24,8 @@ func worker[T any, R any, K comparable](
 				return nil
 			}
 
-			if wp.rateLimiter != nil {
-				if err := wp.rateLimiter.Wait(ctx); err != nil {
-					return err
-				}
-			}
-
 			actualTask := t.Task()
-			if wp.beforeTaskStart != nil {
-				wp.beforeTaskStart(actualTask)
-			}
-
-			result, err := processWithRecovery(ctx, wp, actualTask, processFn)
-			if wp.onTaskEnd != nil {
-				wp.onTaskEnd(actualTask, result, err)
-			}
+			result, err := executeTask(ctx, wp, actualTask, processFn)
 
 			select {
 			case resultChan <- Result[R, K]{Value: result, Error: err, Key: t.Key()}:
@@ -52,6 +39,35 @@ func worker[T any, R any, K comparable](
 			return ctx.Err()
 		}
 	}
+}
+
+// executeTask encapsulates the common logic for executing a task with hooks, rate limiting, and processing.
+// This function is used by both worker and runSubmitWorker to avoid code duplication.
+// It handles rate limiting, hook execution (beforeTaskStart and onTaskEnd), and task processing with retry.
+func executeTask[T, R any](
+	ctx context.Context,
+	wp *WorkerPool[T, R],
+	task T,
+	processFn ProcessFunc[T, R],
+) (R, error) {
+	if wp.rateLimiter != nil {
+		if err := wp.rateLimiter.Wait(ctx); err != nil {
+			var zero R
+			return zero, err
+		}
+	}
+
+	if wp.beforeTaskStart != nil {
+		wp.beforeTaskStart(task)
+	}
+
+	result, err := processWithRecovery(ctx, wp, task, processFn)
+
+	if wp.onTaskEnd != nil {
+		wp.onTaskEnd(task, result, err)
+	}
+
+	return result, err
 }
 
 // processWithRecovery executes a task with panic recovery and retry logic.
