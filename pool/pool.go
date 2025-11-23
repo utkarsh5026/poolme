@@ -110,9 +110,12 @@ func (wp *WorkerPool[T, R]) Process(
 	var collectionWg sync.WaitGroup
 	var collectionErr error
 
-	collectionWg.Go(func() {
+	collectionWg.Add(1)
+
+	go func() {
+		defer collectionWg.Done()
 		collectionErr = collectToSlice(resultChan, results)
-	})
+	}()
 
 	if err := g.Wait(); err != nil {
 		close(resultChan)
@@ -169,9 +172,11 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 	var collectionWg sync.WaitGroup
 	var collectionErr error
 
-	collectionWg.Go(func() {
+	collectionWg.Add(1)
+	go func() {
+		defer collectionWg.Done()
 		collectionErr = collectToMap(resultChan, results)
-	})
+	}()
 
 	if err := g.Wait(); err != nil {
 		close(resultChan)
@@ -210,27 +215,35 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 	internalTaskChan := make(chan task[T, int], wp.taskBuffer)
 	internalResultChan := make(chan Result[R, int], wp.taskBuffer)
 
+	g, gctx := errgroup.WithContext(ctx)
+
+	for i := 0; i < wp.workerCount; i++ {
+		g.Go(func() error {
+			return worker(wp, gctx, internalTaskChan, internalResultChan, processFn)
+		})
+	}
+
+	g.Go(func() error {
+		produceFromChannel(gctx, internalTaskChan, taskChan)
+		return nil
+	})
+
 	go func() {
 		defer close(resChan)
 		defer close(errCh)
 
-		g, gctx := errgroup.WithContext(ctx)
-
-		for i := 0; i < wp.workerCount; i++ {
-			g.Go(func() error {
-				return worker(wp, gctx, internalTaskChan, internalResultChan, processFn)
-			})
-		}
-
 		var collectorWg sync.WaitGroup
 		collectorWg.Add(1)
 		var firstErr error
+
 		go func() {
 			defer collectorWg.Done()
+
 			for result := range internalResultChan {
 				if result.Error != nil && firstErr == nil {
 					firstErr = result.Error
 				}
+
 				resChan <- result.Value
 			}
 		}()
@@ -246,8 +259,6 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 			errCh <- firstErr
 		}
 	}()
-
-	go produceFromChannel(ctx, internalTaskChan, taskChan)
 
 	return resChan, errCh
 }
