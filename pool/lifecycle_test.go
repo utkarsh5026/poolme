@@ -488,9 +488,13 @@ func TestWorkerPool_Lifecycle_ContextCancellation(t *testing.T) {
 	}
 
 	// Check that most futures have errors due to cancellation
+	// Use GetWithContext to avoid blocking indefinitely if context was cancelled
 	errorCount := 0
+	getCtx, getCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer getCancel()
+
 	for _, future := range futures {
-		_, _, err := future.Get()
+		_, _, err := future.GetWithContext(getCtx)
 		if err != nil {
 			errorCount++
 		}
