@@ -1131,6 +1131,11 @@ func TestWorkerPool_ContinueOnError_ProcessStream_StopsOnError(t *testing.T) {
 	if err.Error() != "error on task 5" {
 		t.Errorf("expected 'error on task 5', got %v", err)
 	}
+
+	// Verify that processing stopped (should have fewer than 10 results)
+	if len(results) >= 10 {
+		t.Errorf("expected processing to stop on error, got %d results", len(results))
+	}
 }
 
 func TestWorkerPool_ContinueOnError_ProcessStream_ContinuesOnError(t *testing.T) {
