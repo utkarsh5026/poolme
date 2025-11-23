@@ -99,7 +99,9 @@ func WithBeforeTaskStart[T any](startFunc func(task T)) WorkerPoolOption {
 			return
 		}
 		cfg.beforeTaskStart = func(task any) {
-			startFunc(task.(T))
+			if t, ok := task.(T); ok {
+				startFunc(t)
+			}
 		}
 		var zero T
 		cfg.beforeTaskStartType = getTypeName(zero)
@@ -129,9 +131,13 @@ func WithOnTaskEnd[T any, R any](endFunc func(task T, result R, err error)) Work
 		cfg.onTaskEnd = func(task any, result any, err error) {
 			var r R
 			if result != nil {
-				r = result.(R)
+				if converted, ok := result.(R); ok {
+					r = converted
+				}
 			}
-			endFunc(task.(T), r, err)
+			if t, ok := task.(T); ok {
+				endFunc(t, r, err)
+			}
 		}
 		var zeroT T
 		var zeroR R
@@ -159,7 +165,9 @@ func WithOnEachAttempt[T any](attemptFunc func(task T, attempt int, err error)) 
 			return
 		}
 		cfg.onRetry = func(task any, attempt int, err error) {
-			attemptFunc(task.(T), attempt, err)
+			if t, ok := task.(T); ok {
+				attemptFunc(t, attempt, err)
+			}
 		}
 		var zero T
 		cfg.onRetryType = getTypeName(zero)
