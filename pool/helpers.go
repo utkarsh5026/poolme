@@ -29,11 +29,6 @@ func checkfuncs[T any, R any](cfg *workerPoolConfig, expectedTaskType, expectedR
 				cfg.beforeTaskStartType, expectedTaskType))
 		}
 		beforeTaskStart = func(task T) {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Printf("beforeTaskStart hook panic: %v\n", r)
-				}
-			}()
 			cfg.beforeTaskStart(task)
 		}
 	}
@@ -48,11 +43,6 @@ func checkfuncs[T any, R any](cfg *workerPoolConfig, expectedTaskType, expectedR
 				cfg.onTaskEndResultType, expectedResultType))
 		}
 		onTaskEnd = func(task T, result R, err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Printf("onTaskEnd hook panic: %v\n", r)
-				}
-			}()
 			cfg.onTaskEnd(task, result, err)
 		}
 	}
@@ -63,11 +53,6 @@ func checkfuncs[T any, R any](cfg *workerPoolConfig, expectedTaskType, expectedR
 				cfg.onRetryType, expectedTaskType))
 		}
 		onRetry = func(task T, attempt int, err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					fmt.Printf("onRetry hook panic: %v\n", r)
-				}
-			}()
 			cfg.onRetry(task, attempt, err)
 		}
 	}

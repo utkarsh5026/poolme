@@ -212,32 +212,6 @@ func TestHooksTypeSafety(t *testing.T) {
 	})
 }
 
-// TestHookPanicRecovery verifies that panics in hooks don't crash the pool
-func TestHookPanicRecovery(t *testing.T) {
-	wp := NewWorkerPool[int, string](
-		WithWorkerCount(2),
-		WithBeforeTaskStart(func(task int) {
-			if task == 2 {
-				panic("intentional panic in hook")
-			}
-		}),
-	)
-
-	tasks := []int{1, 2, 3}
-	results, err := wp.Process(context.Background(), tasks, func(ctx context.Context, task int) (string, error) {
-		return fmt.Sprintf("result-%d", task), nil
-	})
-
-	// Pool should continue working despite hook panic
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(results) != 3 {
-		t.Fatalf("expected 3 results, got %d", len(results))
-	}
-}
-
 // TestHooksWithProcessMap demonstrates hooks work with ProcessMap
 func TestHooksWithProcessMap(t *testing.T) {
 	var mu sync.Mutex
