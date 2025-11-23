@@ -19,11 +19,12 @@ import (
 //   - T: The input task type
 //   - R: The result type
 type WorkerPool[T any, R any] struct {
-	workerCount  int
-	taskBuffer   int
-	maxAttempts  int
-	initialDelay time.Duration
-	rateLimiter  *rate.Limiter
+	workerCount     int
+	taskBuffer      int
+	maxAttempts     int
+	initialDelay    time.Duration
+	rateLimiter     *rate.Limiter
+	continueOnError bool
 
 	beforeTaskStart func(T)
 	onTaskEnd       func(T, R, error)
@@ -64,6 +65,7 @@ func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 		beforeTaskStart: beforeTaskStart,
 		onTaskEnd:       onTaskEnd,
 		onRetry:         onRetry,
+		continueOnError: cfg.continueOnError,
 	}
 }
 
@@ -212,7 +214,7 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 					case <-ctx.Done():
 						return ctx.Err()
 					}
-					if err != nil {
+					if err != nil && !wp.continueOnError {
 						return err // Stop on first error
 					}
 				case <-ctx.Done():
@@ -316,7 +318,7 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 						if wp.onTaskEnd != nil {
 							wp.onTaskEnd(task.task, result, err)
 						}
-						if err != nil {
+						if err != nil && !wp.continueOnError {
 							return err
 						}
 						select {
@@ -383,7 +385,7 @@ func (wp *WorkerPool[T, R]) worker(
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			if err != nil {
+			if err != nil && !wp.continueOnError {
 				return err // Stop on first error
 			}
 		case <-ctx.Done():
