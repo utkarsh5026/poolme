@@ -61,22 +61,6 @@ func checkfuncs[T any, R any](cfg *workerPoolConfig, expectedTaskType, expectedR
 	return beforeTaskStart, onTaskEnd, onRetry
 }
 
-// produceFromMap produces tasks from a map and sends them to taskChan.
-// It wraps each task with its key and handles context cancellation.
-// The channel is closed when all tasks are sent or context is cancelled.
-func produceFromMap[T any](ctx context.Context, taskChan chan<- task[T, string], tasks map[string]T) error {
-	defer close(taskChan)
-	for key, t := range tasks {
-		kt := &keyedTask[T, string]{key: key, task: t}
-		select {
-		case taskChan <- kt:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return nil
-}
-
 // produceFromChannel produces tasks from an input channel and sends them to taskChan.
 // It wraps each task with a dummy index (-1) and handles context cancellation.
 // The channel is closed when the input channel is closed or context is cancelled.
@@ -90,19 +74,4 @@ func produceFromChannel[T any](ctx context.Context, taskChan chan<- task[T, int]
 			taskChan <- &indexedTask[T]{task: t, index: -1}
 		}
 	}
-}
-
-// collectToMap collects results from a channel into a map.
-// It handles errors and uses the result keys as map keys.
-// Returns the first error encountered, if any.
-func collectToMap[R any](resultChan <-chan Result[R, string], results map[string]R) error {
-	var collectionErr error
-	for result := range resultChan {
-		if result.Error != nil {
-			collectionErr = result.Error
-			continue
-		}
-		results[result.Key] = result.Value
-	}
-	return collectionErr
 }
