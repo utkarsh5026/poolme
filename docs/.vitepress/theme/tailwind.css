@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Force dark theme and Cascadia Code font */
+  html {
+    @apply dark;
+    color-scheme: dark;
+  }
+
+  code, pre, kbd, samp {
+    font-family: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+    font-feature-settings: "calt" 1, "liga" 1;
+    font-variant-ligatures: common-ligatures;
+  }
+}
+
+@layer components {
+  /* Custom component styles optimized for dark theme */
+  .feature-card {
+    @apply p-6 rounded-lg border border-white/10
+           hover:shadow-xl hover:border-poolme-primary/50 transition-all duration-300
+           bg-white/[0.03] hover:bg-white/[0.05];
+  }
+
+  .code-example {
+    @apply my-4 p-4 rounded-lg bg-poolme-darker
+           border border-white/10
+           shadow-lg;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium
+           bg-poolme-primary/20 text-poolme-primary
+           border border-poolme-primary/30;
+  }
+
+  .hero-gradient {
+    @apply bg-gradient-to-r from-poolme-primary via-poolme-secondary to-poolme-accent
+           bg-clip-text text-transparent;
+  }
+
+  /* Enhanced dark theme cards */
+  .dark-card {
+    @apply bg-poolme-bg-soft border border-white/10 rounded-lg p-4
+           hover:border-poolme-primary/50 transition-all duration-300;
+  }
+
+  /* Code block enhancements */
+  .code-block-dark {
+    @apply bg-poolme-darker rounded-lg p-4 overflow-x-auto
+           border border-white/10 shadow-lg;
+  }
+
+  /* Gradient text utilities */
+  .gradient-primary {
+    @apply bg-gradient-to-r from-poolme-primary to-poolme-secondary
+           bg-clip-text text-transparent;
+  }
+
+  .gradient-accent {
+    @apply bg-gradient-to-r from-poolme-secondary to-poolme-accent
+           bg-clip-text text-transparent;
+  }
+
+  /* Button styles for dark theme */
+  .btn-primary {
+    @apply px-4 py-2 rounded-lg bg-poolme-primary text-white
+           hover:bg-poolme-primary/80 transition-colors duration-200
+           font-medium shadow-lg shadow-poolme-primary/20;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 rounded-lg bg-white/10 text-white
+           hover:bg-white/20 transition-colors duration-200
+           font-medium border border-white/20;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Dark theme specific utilities */
+  .glass-effect {
+    @apply bg-white/5 backdrop-blur-lg border border-white/10;
+  }
+
+  .glow-primary {
+    text-shadow: 0 0 20px theme('colors.poolme.primary');
+  }
+
+  .glow-secondary {
+    text-shadow: 0 0 20px theme('colors.poolme.secondary');
+  }
+
+  .shadow-glow-primary {
+    box-shadow: 0 0 20px theme('colors.poolme.primary / 30%');
+  }
+
+  .cascadia-code {
+    font-family: "Cascadia Code", "Cascadia Mono", monospace;
+    font-feature-settings: "calt" 1, "liga" 1;
+    font-variant-ligatures: common-ligatures;
+  }
+}

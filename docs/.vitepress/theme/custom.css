@@ -1,0 +1,281 @@
+/**
+ * Custom styles for PoolMe documentation
+ * Dark theme optimized with Cascadia Code font
+ */
+
+:root {
+  /* Font families - Cascadia Code for code */
+  --vp-font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  --vp-font-family-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+
+  /* Enable font ligatures for Cascadia Code */
+  --vp-code-font-feature-settings: "calt" 1, "liga" 1;
+
+  /* Dark theme colors (default) */
+  --vp-c-bg: #1e1e1e;
+  --vp-c-bg-soft: #252526;
+  --vp-c-bg-mute: #2d2d30;
+  --vp-c-bg-alt: #1a1a1a;
+
+  /* Brand colors - vibrant for dark theme */
+  --vp-c-brand-1: #60a5fa;
+  --vp-c-brand-2: #3b82f6;
+  --vp-c-brand-3: #2563eb;
+  --vp-c-brand-soft: rgba(59, 130, 246, 0.14);
+
+  /* Text colors optimized for dark */
+  --vp-c-text-1: rgba(255, 255, 255, 0.87);
+  --vp-c-text-2: rgba(255, 255, 255, 0.6);
+  --vp-c-text-3: rgba(255, 255, 255, 0.38);
+
+  /* Divider colors */
+  --vp-c-divider: rgba(255, 255, 255, 0.1);
+  --vp-c-divider-light: rgba(255, 255, 255, 0.05);
+
+  /* Custom accent colors */
+  --poolme-primary: #60a5fa;
+  --poolme-secondary: #a78bfa;
+  --poolme-accent: #f472b6;
+
+  /* Code block colors - VS Code dark theme inspired */
+  --vp-code-bg: #1a1a1a;
+  --vp-code-block-bg: #1a1a1a;
+  --vp-code-color: #d4d4d4;
+  --vp-code-line-highlight-color: rgba(255, 255, 255, 0.05);
+
+  /* Sidebar colors */
+  --vp-sidebar-bg-color: #1e1e1e;
+  --vp-c-bg-elv: #252526;
+}
+
+/* Light mode colors (if user manually switches) */
+html:not(.dark) {
+  --vp-c-brand-1: #3b82f6;
+  --vp-c-brand-2: #2563eb;
+  --vp-c-brand-3: #1d4ed8;
+
+  --poolme-primary: #3b82f6;
+  --poolme-secondary: #8b5cf6;
+  --poolme-accent: #ec4899;
+}
+
+/* Force dark theme by default */
+html {
+  color-scheme: dark;
+}
+
+/* Apply Cascadia Code to all code elements */
+code,
+pre,
+kbd,
+samp,
+.vp-code,
+.shiki,
+.vp-code-group code {
+  font-family: var(--vp-font-family-mono);
+  font-feature-settings: var(--vp-code-font-feature-settings);
+  font-variant-ligatures: common-ligatures;
+}
+
+/* Enhanced code block styling */
+.vp-code-group {
+  margin: 1.5rem 0;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.3);
+  background: #1a1a1a;
+}
+
+div[class*='language-'] {
+  background-color: #1a1a1a !important;
+  border-radius: 8px;
+}
+
+div[class*='language-'] code {
+  background-color: transparent;
+  color: #d4d4d4;
+  line-height: 1.6;
+}
+
+/* Line numbers styling */
+.line-numbers-wrapper {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* Highlighted lines */
+.line.highlighted {
+  background-color: rgba(96, 165, 250, 0.1);
+  border-left: 3px solid var(--poolme-primary);
+  padding-left: 1rem;
+  margin-left: -1rem;
+}
+
+/* Hero section customization - vibrant gradient for dark theme */
+.VPHero .name {
+  background: linear-gradient(120deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: 0 0 30px rgba(96, 165, 250, 0.3);
+}
+
+.VPHero .tagline {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Custom containers - dark theme optimized */
+.custom-block {
+  background-color: rgba(255, 255, 255, 0.03);
+  border-left-width: 4px;
+}
+
+.custom-block.tip {
+  border-left-color: var(--poolme-primary);
+  background-color: rgba(96, 165, 250, 0.05);
+}
+
+.custom-block.warning {
+  border-left-color: #f59e0b;
+  background-color: rgba(245, 158, 11, 0.05);
+}
+
+.custom-block.danger {
+  border-left-color: #ef4444;
+  background-color: rgba(239, 68, 68, 0.05);
+}
+
+/* Navigation enhancements */
+.VPNav {
+  backdrop-filter: blur(10px);
+  background-color: rgba(30, 30, 30, 0.8);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Sidebar styling */
+.VPSidebar {
+  background-color: var(--vp-sidebar-bg-color);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Footer styling */
+.VPFooter {
+  background: linear-gradient(to right, #1f2937, #111827);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* API documentation tables */
+.vp-doc table {
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.vp-doc th {
+  background: rgba(96, 165, 250, 0.1);
+  font-weight: 600;
+  color: var(--poolme-primary);
+  border-bottom: 2px solid rgba(96, 165, 250, 0.3);
+}
+
+.vp-doc td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.vp-doc tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Links */
+.vp-doc a {
+  color: var(--poolme-primary);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.vp-doc a:hover {
+  color: var(--poolme-secondary);
+  text-decoration: underline;
+}
+
+/* Inline code */
+.vp-doc code {
+  background-color: rgba(96, 165, 250, 0.1);
+  color: var(--poolme-primary);
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.9em;
+}
+
+/* Feature cards from Tailwind */
+.feature-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.feature-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--poolme-primary);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* Search box */
+.DocSearch-Button {
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.DocSearch-Button:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Selection color */
+::selection {
+  background-color: rgba(96, 165, 250, 0.3);
+  color: #ffffff;
+}
+
+/* Responsive typography */
+@media (max-width: 768px) {
+  .VPHero .name {
+    font-size: 2rem;
+  }
+}
+
+/* Better contrast for badges */
+.badge {
+  background: rgba(96, 165, 250, 0.2);
+  color: var(--poolme-primary);
+  border: 1px solid rgba(96, 165, 250, 0.3);
+}
+
+/* Home page feature icons */
+.vp-doc h2::before {
+  background: linear-gradient(120deg, var(--poolme-primary), var(--poolme-secondary));
+}
