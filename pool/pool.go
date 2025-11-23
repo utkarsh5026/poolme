@@ -92,53 +92,44 @@ func (wp *WorkerPool[T, R]) Process(
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	taskChan := make(chan indexedTask[T], wp.taskBuffer)
-	resultChan := make(chan Result[R], len(tasks))
+	taskChan := make(chan task[T, int], wp.taskBuffer)
+	resultChan := make(chan Result[R, int], len(tasks))
 
 	numWorkers := min(wp.workerCount, len(tasks))
 	for range numWorkers {
 		g.Go(func() error {
-			return wp.worker(ctx, taskChan, resultChan, processFn)
+			return worker(wp, ctx, taskChan, resultChan, processFn)
 		})
 	}
 
 	g.Go(func() error {
-		defer close(taskChan)
-		for idx, task := range tasks {
-			select {
-			case taskChan <- indexedTask[T]{index: idx, task: task}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		return nil
+		return produceFromSlice(ctx, taskChan, tasks)
 	})
 
-	// Collect results asynchronously
 	results := make([]R, len(tasks))
 	var collectionErr error
 	var collectionWg sync.WaitGroup
 
-	collectionWg.Go(func() {
+	collectionWg.Add(1)
+	go func() {
+		defer collectionWg.Done()
 		for result := range resultChan {
 			if result.Error != nil {
 				collectionErr = result.Error
 				continue
 			}
-			if result.Index >= 0 && result.Index < len(results) {
-				results[result.Index] = result.Value
+			if result.Key >= 0 && result.Key < len(results) {
+				results[result.Key] = result.Value
 			}
 		}
-	})
+	}()
 
-	// Wait for all workers to complete
 	if err := g.Wait(); err != nil {
 		close(resultChan)
 		collectionWg.Wait()
 		return results, err
 	}
 
-	// Close result channel and wait for collection to complete
 	close(resultChan)
 	collectionWg.Wait()
 
@@ -169,75 +160,21 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 		return map[string]R{}, nil
 	}
 
-	type keyedTask struct {
-		task T
-		key  string
-	}
-
-	type keyedResult struct {
-		value R
-		err   error
-		key   string
-	}
-
-	// Use errgroup for automatic error propagation
 	g, ctx := errgroup.WithContext(ctx)
+	taskChan := make(chan task[T, string], wp.taskBuffer)
+	resultChan := make(chan Result[R, string], len(tasks))
 
-	// Create buffered channels
-	taskChan := make(chan keyedTask, wp.taskBuffer)
-	resultChan := make(chan keyedResult, len(tasks))
-
-	// Start workers
 	numWorkers := min(wp.workerCount, len(tasks))
 	for range numWorkers {
 		g.Go(func() error {
-			for {
-				select {
-				case task, ok := <-taskChan:
-					if !ok {
-						return nil
-					}
-					if wp.rateLimiter != nil {
-						if err := wp.rateLimiter.Wait(ctx); err != nil {
-							return err
-						}
-					}
-					if wp.beforeTaskStart != nil {
-						wp.beforeTaskStart(task.task)
-					}
-					result, err := wp.processWithRecovery(ctx, task.task, processFn)
-					if wp.onTaskEnd != nil {
-						wp.onTaskEnd(task.task, result, err)
-					}
-					select {
-					case resultChan <- keyedResult{key: task.key, value: result, err: err}:
-					case <-ctx.Done():
-						return ctx.Err()
-					}
-					if err != nil && !wp.continueOnError {
-						return err // Stop on first error
-					}
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
+			return worker(wp, ctx, taskChan, resultChan, processFn)
 		})
 	}
 
-	// Send tasks asynchronously
 	g.Go(func() error {
-		defer close(taskChan)
-		for key, task := range tasks {
-			select {
-			case taskChan <- keyedTask{key: key, task: task}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		return nil
+		return produceFromMap(ctx, taskChan, tasks)
 	})
 
-	// Collect results asynchronously
 	results := make(map[string]R, len(tasks))
 	var collectionErr error
 	var collectionWg sync.WaitGroup
@@ -246,22 +183,20 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 	go func() {
 		defer collectionWg.Done()
 		for result := range resultChan {
-			if result.err != nil {
-				collectionErr = result.err
+			if result.Error != nil {
+				collectionErr = result.Error
 				continue
 			}
-			results[result.key] = result.value
+			results[result.Key] = result.Value
 		}
 	}()
 
-	// Wait for all workers to complete
 	if err := g.Wait(); err != nil {
 		close(resultChan)
 		collectionWg.Wait()
 		return results, err
 	}
 
-	// Close result channel and wait for collection to complete
 	close(resultChan)
 	collectionWg.Wait()
 
@@ -290,7 +225,8 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 ) (resultChan <-chan R, errChan <-chan error) {
 	resChan := make(chan R, wp.taskBuffer)
 	errCh := make(chan error, 1)
-	retryableTaskChan := make(chan indexedTask[T], wp.taskBuffer)
+	internalTaskChan := make(chan task[T, int], wp.taskBuffer)
+	internalResultChan := make(chan Result[R, int], wp.taskBuffer)
 
 	go func() {
 		defer close(resChan)
@@ -300,137 +236,36 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 
 		for i := 0; i < wp.workerCount; i++ {
 			g.Go(func() error {
-				for {
-					select {
-					case task, ok := <-retryableTaskChan:
-						if !ok {
-							return nil
-						}
-						if wp.rateLimiter != nil {
-							if err := wp.rateLimiter.Wait(gctx); err != nil {
-								return err
-							}
-						}
-						if wp.beforeTaskStart != nil {
-							wp.beforeTaskStart(task.task)
-						}
-						result, err := wp.processWithRecovery(gctx, task.task, processFn)
-						if wp.onTaskEnd != nil {
-							wp.onTaskEnd(task.task, result, err)
-						}
-						if err != nil && !wp.continueOnError {
-							return err
-						}
-						select {
-						case resChan <- result:
-						case <-gctx.Done():
-							return gctx.Err()
-						}
-					case <-gctx.Done():
-						return gctx.Err()
-					}
-				}
+				return worker(wp, gctx, internalTaskChan, internalResultChan, processFn)
 			})
 		}
 
-		if err := g.Wait(); err != nil {
-			errCh <- err
-		}
-	}()
-
-	go func() {
-		defer close(retryableTaskChan)
-		for t := range taskChan {
-			select {
-			case <-ctx.Done():
-				return
-
-			default:
-				retryableTaskChan <- indexedTask[T]{task: t, index: -1}
+		var collectorWg sync.WaitGroup
+		collectorWg.Add(1)
+		var firstErr error
+		go func() {
+			defer collectorWg.Done()
+			for result := range internalResultChan {
+				if result.Error != nil && firstErr == nil {
+					firstErr = result.Error
+				}
+				resChan <- result.Value
 			}
+		}()
+
+		workerErr := g.Wait()
+		close(internalResultChan)
+
+		collectorWg.Wait()
+
+		if workerErr != nil {
+			errCh <- workerErr
+		} else if firstErr != nil {
+			errCh <- firstErr
 		}
 	}()
+
+	go produceFromChannel(ctx, internalTaskChan, taskChan)
 
 	return resChan, errCh
-}
-
-// worker is the core worker function that processes tasks from the task channel.
-// It includes panic recovery to prevent a single task from crashing the entire pool.
-func (wp *WorkerPool[T, R]) worker(
-	ctx context.Context,
-	taskChan <-chan indexedTask[T],
-	resultChan chan<- Result[R],
-	processFn ProcessFunc[T, R],
-) error {
-	for {
-		select {
-		case task, ok := <-taskChan:
-			if !ok {
-				return nil
-			}
-			if wp.rateLimiter != nil {
-				if err := wp.rateLimiter.Wait(ctx); err != nil {
-					return err
-				}
-			}
-			if wp.beforeTaskStart != nil {
-				wp.beforeTaskStart(task.task)
-			}
-			result, err := wp.processWithRecovery(ctx, task.task, processFn)
-			if wp.onTaskEnd != nil {
-				wp.onTaskEnd(task.task, result, err)
-			}
-			select {
-			case resultChan <- Result[R]{Value: result, Error: err, Index: task.index}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			if err != nil && !wp.continueOnError {
-				return err // Stop on first error
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
-
-// processWithRecovery executes a task with panic recovery and retry logic.
-// If a panic occurs, it's converted to an error to prevent crashing the worker.
-// Retries use exponential backoff if initialDelay is configured.
-func (wp *WorkerPool[T, R]) processWithRecovery(
-	ctx context.Context,
-	task T,
-	processFn ProcessFunc[T, R],
-) (result R, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			buf := make([]byte, 4096)
-			n := runtime.Stack(buf, false)
-			err = fmt.Errorf("worker panic: %v\nstack trace:\n%s", r, buf[:n])
-		}
-	}()
-
-	maxAttempts := max(wp.maxAttempts, 1)
-
-	for attempt := range maxAttempts {
-		if attempt > 0 && wp.initialDelay > 0 {
-			backoffDelay := calcBackoffDelay(wp.initialDelay, attempt-1)
-			select {
-			case <-time.After(backoffDelay):
-			case <-ctx.Done():
-				return result, ctx.Err()
-			}
-		}
-
-		result, err = processFn(ctx, task)
-		if err == nil {
-			return result, nil
-		}
-
-		if wp.onRetry != nil && attempt < maxAttempts-1 {
-			wp.onRetry(task, attempt+1, err)
-		}
-	}
-
-	return result, err
 }

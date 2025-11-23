@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"time"
@@ -58,4 +59,51 @@ func checkfuncs[T any, R any](cfg *workerPoolConfig, expectedTaskType, expectedR
 	}
 
 	return beforeTaskStart, onTaskEnd, onRetry
+}
+
+// produceFromSlice produces tasks from a slice and sends them to taskChan.
+// It wraps each task with its index and handles context cancellation.
+// The channel is closed when all tasks are sent or context is cancelled.
+func produceFromSlice[T any](ctx context.Context, taskChan chan<- task[T, int], tasks []T) error {
+	defer close(taskChan)
+	for idx, t := range tasks {
+		it := &indexedTask[T]{index: idx, task: t}
+		select {
+		case taskChan <- it:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// produceFromMap produces tasks from a map and sends them to taskChan.
+// It wraps each task with its key and handles context cancellation.
+// The channel is closed when all tasks are sent or context is cancelled.
+func produceFromMap[T any](ctx context.Context, taskChan chan<- task[T, string], tasks map[string]T) error {
+	defer close(taskChan)
+	for key, t := range tasks {
+		kt := &keyedTask[T, string]{key: key, task: t}
+		select {
+		case taskChan <- kt:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// produceFromChannel produces tasks from an input channel and sends them to taskChan.
+// It wraps each task with a dummy index (-1) and handles context cancellation.
+// The channel is closed when the input channel is closed or context is cancelled.
+func produceFromChannel[T any](ctx context.Context, taskChan chan<- task[T, int], inputChan <-chan T) {
+	defer close(taskChan)
+	for t := range inputChan {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			taskChan <- &indexedTask[T]{task: t, index: -1}
+		}
+	}
 }
