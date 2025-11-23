@@ -11,11 +11,12 @@ import (
 type WorkerPoolOption func(*workerPoolConfig)
 
 type workerPoolConfig struct {
-	workerCount  int
-	taskBuffer   int
-	maxAttempts  int
-	initialDelay time.Duration
-	rateLimiter  *rate.Limiter
+	workerCount     int
+	taskBuffer      int
+	maxAttempts     int
+	initialDelay    time.Duration
+	rateLimiter     *rate.Limiter
+	continueOnError bool
 
 	// Hook functions stored as any for flexibility
 	beforeTaskStart     func(any)
@@ -171,6 +172,23 @@ func WithOnEachAttempt[T any](attemptFunc func(task T, attempt int, err error)) 
 		}
 		var zero T
 		cfg.onRetryType = getTypeName(zero)
+	}
+}
+
+// WithContinueOnError configures whether the worker pool should continue processing
+// remaining tasks when a task fails. If set to true, task failures will not stop
+// the pool from processing other tasks in the queue. If set to false (default),
+// the pool may stop processing based on error handling behavior.
+// This is useful when you want to ensure all tasks are attempted regardless of failures.
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithContinueOnError(true), // Continue processing even if some tasks fail
+//	)
+func WithContinueOnError(continueOnError bool) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.continueOnError = continueOnError
 	}
 }
 
