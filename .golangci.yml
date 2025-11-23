@@ -1,0 +1,13 @@
+linters-settings:
+  errcheck:
+    exclude-functions:
+      # Allow ignoring errors in test files
+    check-blank: false
+    check-type-assertions: true
+
+issues:
+  exclude-rules:
+    # Exclude errcheck for test files
+    - path: _test\.go
+      linters:
+        - errcheck
