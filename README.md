@@ -81,8 +81,6 @@
 - Rate limiting for external API calls
 - Real-time task monitoring and metrics
 
-      </td>
-
     </tr>
   </table>
 
