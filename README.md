@@ -1,43 +1,94 @@
 <div align="center">
 
-# poolme
+<img src="docs/public/logo.svg" alt="PoolMe Logo" width="200"/>
 
-**A simple, powerful, and type-safe worker pool for Go**
+<h1>PoolMe</h1>
 
-[![CI](https://github.com/utkarsh5026/poolme/actions/workflows/ci.yml/badge.svg)](https://github.com/utkarsh5026/poolme/actions/workflows/ci.yml)
-[![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.18-blue.svg)](https://golang.org/)
-[![Go Reference](https://pkg.go.dev/badge/github.com/utkarsh5026/poolme.svg)](https://pkg.go.dev/github.com/utkarsh5026/poolme)
-[![Go Report Card](https://goreportcard.com/badge/github.com/utkarsh5026/poolme)](https://goreportcard.com/report/github.com/utkarsh5026/poolme)
-[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/utkarsh5026/poolme)](https://github.com/utkarsh5026/poolme/releases/latest)
+<p align="center">
+  <strong>A simple, powerful, and type-safe worker pool for Go</strong>
+</p>
 
-A production-ready worker pool implementation using Go generics, designed for efficient concurrent task processing with advanced features like retry logic, rate limiting, and lifecycle hooks.
+<p align="center">
+  Production-ready worker pool implementation using Go generics<br/>
+  Designed for efficient concurrent task processing with advanced features
+</p>
 
-[Features](#features) •
-[Installation](#installation) •
-[Quick Start](#quick-start) •
-[Advanced Usage](#advanced-usage) •
-[API Reference](#api-reference) •
-[License](#license)
+<p align="center">
+  <a href="https://github.com/utkarsh5026/poolme/actions/workflows/ci.yml">
+    <img src="https://github.com/utkarsh5026/poolme/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://golang.org/">
+    <img src="https://img.shields.io/badge/Go-%3E%3D%201.18-blue.svg" alt="Go Version">
+  </a>
+  <a href="https://pkg.go.dev/github.com/utkarsh5026/poolme">
+    <img src="https://pkg.go.dev/badge/github.com/utkarsh5026/poolme.svg" alt="Go Reference">
+  </a>
+  <br/>
+  <a href="https://goreportcard.com/report/github.com/utkarsh5026/poolme">
+    <img src="https://goreportcard.com/badge/github.com/utkarsh5026/poolme" alt="Go Report Card">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License">
+  </a>
+  <a href="https://github.com/utkarsh5026/poolme/releases/latest">
+    <img src="https://img.shields.io/github/v/release/utkarsh5026/poolme" alt="Release">
+  </a>
+</p>
+
+<p align="center">
+  <a href="#-features">Features</a> •
+  <a href="#-installation">Installation</a> •
+  <a href="#-quick-start">Quick Start</a> •
+  <a href="#-usage">Usage</a> •
+  <a href="#-performance">Performance</a> •
+  <a href="#-api-reference">API</a>
+</p>
 
 </div>
 
----
+<br/>
 
-## Features
+## ✨ Features
 
-- **🔧 Generic** - Works with any task type (`T`) and result type (`R`) using Go 1.18+ generics
-- **⚙️ Configurable** - Fine-tune worker count, task buffer size, and processing behavior
-- **🎯 Context-Aware** - Full support for `context.Context` cancellation and timeouts
-- **💪 Robust** - Built-in error propagation and panic recovery in workers
-- **🔄 Flexible Processing** - Process tasks from slices, maps, or channels
-- **🔁 Retry Logic** - Configurable retry policies with exponential backoff
-- **⏱️ Rate Limiting** - Control task throughput to prevent overwhelming external services
-- **🎣 Lifecycle Hooks** - Monitor and react to task lifecycle events
+<table>
+  <tr>
+    <td width="50%">
 
----
+**🔧 Generic & Type-Safe**
 
-## Installation
+- Works with any task type (`T`) and result type (`R`)
+- Leverages Go 1.18+ generics for compile-time safety
+- Zero interface{} conversions
+
+**⚙️ Highly Configurable**
+
+- Fine-tune worker count and buffer sizes
+- Flexible processing modes (slice, map, stream)
+- Customizable error handling strategies
+
+    </td>
+    <td width="50%">
+
+**🎯 Production-Ready**
+
+- Context-aware cancellation and timeouts
+- Built-in panic recovery in workers
+- Thread-safe lifecycle hooks
+
+**🚀 Advanced Features**
+
+- Configurable retry policies with exponential backoff
+- Rate limiting for external API calls
+- Real-time task monitoring and metrics
+
+      </td>
+
+    </tr>
+  </table>
+
+<br/>
+
+## 📦 Installation
 
 ```bash
 go get github.com/utkarsh5026/poolme
@@ -45,11 +96,11 @@ go get github.com/utkarsh5026/poolme
 
 **Requirements:** Go 1.18 or higher
 
----
+<br/>
 
-## Quick Start
+## 🚀 Quick Start
 
-Here's a simple example to get you started:
+Get up and running in less than a minute:
 
 ```go
 package main
@@ -86,13 +137,29 @@ func main() {
 }
 ```
 
----
+<br/>
 
-## Advanced Usage
+## 💡 Why Choose PoolMe?
+
+| Feature             | PoolMe                               | Traditional Approaches     |
+| ------------------- | ------------------------------------ | -------------------------- |
+| **Type Safety**     | ✅ Full generic support              | ❌ Interface{} hell        |
+| **Retry Logic**     | ✅ Built-in with exponential backoff | ⚠️ Manual implementation   |
+| **Rate Limiting**   | ✅ Native support                    | ⚠️ External library needed |
+| **Lifecycle Hooks** | ✅ Thread-safe monitoring            | ❌ Not available           |
+| **Context Support** | ✅ First-class citizen               | ⚠️ Varies                  |
+| **Panic Recovery**  | ✅ Automatic per worker              | ⚠️ Manual handling         |
+
+<br/>
+
+## 📖 Usage
 
 ### Processing Modes
 
-#### 1. Slice Processing (Ordered Results)
+<details open>
+<summary><b>1️⃣ Slice Processing (Ordered Results)</b></summary>
+
+<br/>
 
 Process a slice of tasks and get results in the same order:
 
@@ -103,7 +170,12 @@ p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
 results, err := p.Process(ctx, tasks, processFn)
 ```
 
-#### 2. Map Processing (Key-Value Pairs)
+</details>
+
+<details>
+<summary><b>2️⃣ Map Processing (Key-Value Pairs)</b></summary>
+
+<br/>
 
 Process map entries and get results mapped by keys:
 
@@ -119,7 +191,12 @@ results, err := p.ProcessMap(ctx, tasks, processFn)
 // results: map[string]string
 ```
 
-#### 3. Stream Processing (Channel-Based)
+</details>
+
+<details>
+<summary><b>3️⃣ Stream Processing (Channel-Based)</b></summary>
+
+<br/>
 
 Process tasks from a channel as they arrive:
 
@@ -145,11 +222,16 @@ for result := range resultChan {
 }
 ```
 
----
+</details>
 
-### Configuration Options
+<br/>
 
-#### Worker Count
+### ⚙️ Configuration Options
+
+<details>
+<summary><b>Worker Count Configuration</b></summary>
+
+<br/>
 
 Control the number of concurrent workers:
 
@@ -159,7 +241,12 @@ p := pool.NewWorkerPool[int, string](
 )
 ```
 
-#### Task Buffer
+</details>
+
+<details>
+<summary><b>Task Buffer Management</b></summary>
+
+<br/>
 
 Set the buffer size for the internal task channel:
 
@@ -170,9 +257,14 @@ p := pool.NewWorkerPool[int, string](
 )
 ```
 
-#### Retry Policy
+</details>
 
-Configure automatic retries with exponential backoff:
+<details>
+<summary><b>Retry Policy with Exponential Backoff</b></summary>
+
+<br/>
+
+Configure automatic retries:
 
 ```go
 p := pool.NewWorkerPool[int, string](
@@ -184,7 +276,12 @@ p := pool.NewWorkerPool[int, string](
 // Retry delays: 100ms, 200ms, 400ms (exponential backoff)
 ```
 
-#### Rate Limiting
+</details>
+
+<details>
+<summary><b>Rate Limiting</b></summary>
+
+<br/>
 
 Control task throughput to prevent overwhelming external services:
 
@@ -197,13 +294,18 @@ p := pool.NewWorkerPool[int, string](
 )
 ```
 
----
+</details>
 
-### Lifecycle Hooks
+<br/>
+
+### 🎣 Lifecycle Hooks
 
 Monitor and react to task lifecycle events:
 
-#### Before Task Start
+<details>
+<summary><b>Before Task Start Hook</b></summary>
+
+<br/>
 
 Called before each task begins processing:
 
@@ -215,7 +317,12 @@ p := pool.NewWorkerPool[int, string](
 )
 ```
 
-#### On Task End
+</details>
+
+<details>
+<summary><b>On Task End Hook</b></summary>
+
+<br/>
 
 Called after each task completes (success or failure):
 
@@ -231,7 +338,12 @@ p := pool.NewWorkerPool[int, string](
 )
 ```
 
-#### On Each Retry Attempt
+</details>
+
+<details>
+<summary><b>On Each Retry Attempt Hook</b></summary>
+
+<br/>
 
 Called after each retry attempt (requires retry policy):
 
@@ -244,11 +356,13 @@ p := pool.NewWorkerPool[int, string](
 )
 ```
 
-**Note:** All hooks must be thread-safe as they may be called concurrently by multiple workers.
+</details>
 
----
+> **⚠️ Important:** All hooks must be thread-safe as they may be called concurrently by multiple workers.
 
-### Complete Example
+<br/>
+
+### 🔥 Complete Example
 
 Combining multiple features for a robust task processing system:
 
@@ -318,9 +432,9 @@ func main() {
 }
 ```
 
----
+<br/>
 
-## API Reference
+## 📚 API Reference
 
 ### Core Types
 
@@ -374,17 +488,17 @@ func (wp *WorkerPool[T, R]) ProcessStream(
 | `WithOnTaskEnd[T, R](func(T, R, error))`                       | Hook called after task completion                 |
 | `WithOnEachAttempt[T](func(T, int, error))`                    | Hook called after each retry attempt              |
 
----
+<br/>
 
-## Best Practices
+## 💡 Best Practices
 
-### 1. Choose the Right Worker Count
+### 1️⃣ Choose the Right Worker Count
 
 - **CPU-bound tasks**: Set to `runtime.NumCPU()`
 - **I/O-bound tasks**: Set higher (e.g., 2-4x CPU count)
 - **External API calls**: Respect rate limits and consider timeouts
 
-### 2. Use Context for Cancellation
+### 2️⃣ Use Context for Cancellation
 
 Always pass a context with timeout or cancellation:
 
@@ -395,13 +509,13 @@ defer cancel()
 results, err := pool.Process(ctx, tasks, processFn)
 ```
 
-### 3. Handle Errors Appropriately
+### 3️⃣ Handle Errors Appropriately
 
 - Use retry policy for transient failures
 - Implement proper error handling in your process function
 - Use hooks to log or monitor errors
 
-### 4. Rate Limiting for External Services
+### 4️⃣ Rate Limiting for External Services
 
 When calling external APIs, use rate limiting to avoid overwhelming them:
 
@@ -411,7 +525,7 @@ pool.NewWorkerPool[T, R](
 )
 ```
 
-### 5. Thread-Safe Hooks
+### 5️⃣ Thread-Safe Hooks
 
 Ensure hook functions are thread-safe as they run concurrently:
 
@@ -426,48 +540,67 @@ pool.WithOnTaskEnd(func(task int, result string, err error) {
 })
 ```
 
----
+<br/>
 
-## Performance
+## ⚡ Performance
 
 ### Benchmark Results
 
 Tested on Intel i7-11800H @ 2.30GHz (16 cores):
 
-| Metric | Result |
-|--------|--------|
-| **Peak Throughput** | ~1M tasks/sec (simple CPU tasks) |
+<div align="center">
+
+| Metric                | Result                                  |
+| --------------------- | --------------------------------------- |
+| **Peak Throughput**   | ~1M tasks/sec (simple CPU tasks)        |
 | **Worker Efficiency** | 400-500K tasks/sec/worker (2-4 workers) |
-| **Memory per Task** | ~65 bytes |
-| **Parallel Speedup** | 19x vs sequential (1000 tasks) |
+| **Memory per Task**   | ~65 bytes                               |
+| **Parallel Speedup**  | 19x vs sequential (1000 tasks)          |
+
+</div>
 
 **Key Findings:**
+
 - Buffer size 4-8x worker count provides ~30% throughput boost
 - Optimal worker count: 8-16 for CPU-bound, 24-48 for I/O-bound tasks
 - Minimal overhead: ~5% with hooks, ~1 allocation per task
 
-Run benchmarks: `go test -bench=BenchmarkComprehensive -benchmem ./pool/`
+**Run benchmarks:**
 
-See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance analysis and tuning guide.
+```bash
+go test -bench=BenchmarkComprehensive -benchmem ./pool/
+```
 
----
+<br/>
 
-## Contributing
+## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
----
+<br/>
 
-## License
+## 📄 License
 
 This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+
+<br/>
 
 ---
 
 <div align="center">
 
+<img src="docs/public/logo.svg" alt="PoolMe Logo" width="80"/>
+
+<br/><br/>
+
 **Made with ❤️ by [utkarsh5026](https://github.com/utkarsh5026)**
 
-If you find this project helpful, please consider giving it a ⭐!
+<br/>
+
+If you find this project helpful, please consider giving it a ⭐
+
+<br/>
+
+[Report Bug](https://github.com/utkarsh5026/poolme/issues) • [Request Feature](https://github.com/utkarsh5026/poolme/issues) • [Documentation](https://pkg.go.dev/github.com/utkarsh5026/poolme)
 
 </div>
