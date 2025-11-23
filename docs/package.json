@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "description": "Documentation for PoolMe - A production-ready Go worker pool library",
   "scripts": {
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
   },
   "devDependencies": {
     "vitepress": "^1.0.0",

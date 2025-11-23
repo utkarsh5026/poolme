@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'PoolMe',
   description: 'A production-ready Go worker pool library with generics support',
-  base: '/poolme/', // Change this to your GitHub repo name
+  base: process.env.NODE_ENV === 'production' ? '/poolme/' : '/',
 
   // Force dark mode as default
   appearance: 'dark',

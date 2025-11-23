@@ -5,7 +5,10 @@
 @layer base {
   /* Force dark theme and Cascadia Code font */
   html {
-    @apply dark;
+    color-scheme: dark;
+  }
+
+  html.dark {
     color-scheme: dark;
   }
 
