@@ -107,22 +107,12 @@ func (wp *WorkerPool[T, R]) Process(
 	})
 
 	results := make([]R, len(tasks))
-	var collectionErr error
 	var collectionWg sync.WaitGroup
+	var collectionErr error
 
-	collectionWg.Add(1)
-	go func() {
-		defer collectionWg.Done()
-		for result := range resultChan {
-			if result.Error != nil {
-				collectionErr = result.Error
-				continue
-			}
-			if result.Key >= 0 && result.Key < len(results) {
-				results[result.Key] = result.Value
-			}
-		}
-	}()
+	collectionWg.Go(func() {
+		collectionErr = collectToSlice(resultChan, results)
+	})
 
 	if err := g.Wait(); err != nil {
 		close(resultChan)
@@ -176,20 +166,12 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 	})
 
 	results := make(map[string]R, len(tasks))
-	var collectionErr error
 	var collectionWg sync.WaitGroup
-	collectionWg.Add(1)
+	var collectionErr error
 
-	go func() {
-		defer collectionWg.Done()
-		for result := range resultChan {
-			if result.Error != nil {
-				collectionErr = result.Error
-				continue
-			}
-			results[result.Key] = result.Value
-		}
-	}()
+	collectionWg.Go(func() {
+		collectionErr = collectToMap(resultChan, results)
+	})
 
 	if err := g.Wait(); err != nil {
 		close(resultChan)

@@ -107,3 +107,35 @@ func produceFromChannel[T any](ctx context.Context, taskChan chan<- task[T, int]
 		}
 	}
 }
+
+// collectToSlice collects results from a channel into a slice.
+// It handles errors and ensures results are placed at their original indices.
+// Returns the first error encountered, if any.
+func collectToSlice[R any](resultChan <-chan Result[R, int], results []R) error {
+	var collectionErr error
+	for result := range resultChan {
+		if result.Error != nil {
+			collectionErr = result.Error
+			continue
+		}
+		if result.Key >= 0 && result.Key < len(results) {
+			results[result.Key] = result.Value
+		}
+	}
+	return collectionErr
+}
+
+// collectToMap collects results from a channel into a map.
+// It handles errors and uses the result keys as map keys.
+// Returns the first error encountered, if any.
+func collectToMap[R any](resultChan <-chan Result[R, string], results map[string]R) error {
+	var collectionErr error
+	for result := range resultChan {
+		if result.Error != nil {
+			collectionErr = result.Error
+			continue
+		}
+		results[result.Key] = result.Value
+	}
+	return collectionErr
+}
