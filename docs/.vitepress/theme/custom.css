@@ -5,8 +5,10 @@
 
 :root {
   /* Font families - Cascadia Code for code */
-  --vp-font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  --vp-font-family-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+  --vp-font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Oxygen, Ubuntu, Cantarell, sans-serif;
+  --vp-font-family-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono",
+    Menlo, Monaco, Consolas, "Courier New", monospace;
 
   /* Enable font ligatures for Cascadia Code */
   --vp-code-font-feature-settings: "calt" 1, "liga" 1;
@@ -33,9 +35,9 @@
   --vp-c-divider-light: rgba(255, 255, 255, 0.05);
 
   /* Custom accent colors */
-  --poolme-primary: #60a5fa;
-  --poolme-secondary: #a78bfa;
-  --poolme-accent: #f472b6;
+  --poolme-primary: #0ea5e9; /* Ocean Blue */
+  --poolme-secondary: #38bdf8; /* Sky Blue */
+  --poolme-accent: #7dd3fc; /* Light Blue */
 
   /* Code block colors - VS Code dark theme inspired */
   --vp-code-bg: #1a1a1a;
@@ -86,12 +88,12 @@ samp,
   background: #1a1a1a;
 }
 
-div[class*='language-'] {
+div[class*="language-"] {
   background-color: #1a1a1a !important;
   border-radius: 8px;
 }
 
-div[class*='language-'] code {
+div[class*="language-"] code {
   background-color: transparent;
   color: #d4d4d4;
   line-height: 1.6;
@@ -277,5 +279,9 @@ html {
 
 /* Home page feature icons */
 .vp-doc h2::before {
-  background: linear-gradient(120deg, var(--poolme-primary), var(--poolme-secondary));
+  background: linear-gradient(
+    120deg,
+    var(--poolme-primary),
+    var(--poolme-secondary)
+  );
 }
