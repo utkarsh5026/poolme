@@ -61,22 +61,6 @@ func checkfuncs[T any, R any](cfg *workerPoolConfig, expectedTaskType, expectedR
 	return beforeTaskStart, onTaskEnd, onRetry
 }
 
-// produceFromSlice produces tasks from a slice and sends them to taskChan.
-// It wraps each task with its index and handles context cancellation.
-// The channel is closed when all tasks are sent or context is cancelled.
-func produceFromSlice[T any](ctx context.Context, taskChan chan<- task[T, int], tasks []T) error {
-	defer close(taskChan)
-	for idx, t := range tasks {
-		it := &indexedTask[T]{index: idx, task: t}
-		select {
-		case taskChan <- it:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return nil
-}
-
 // produceFromMap produces tasks from a map and sends them to taskChan.
 // It wraps each task with its key and handles context cancellation.
 // The channel is closed when all tasks are sent or context is cancelled.
@@ -106,23 +90,6 @@ func produceFromChannel[T any](ctx context.Context, taskChan chan<- task[T, int]
 			taskChan <- &indexedTask[T]{task: t, index: -1}
 		}
 	}
-}
-
-// collectToSlice collects results from a channel into a slice.
-// It handles errors and ensures results are placed at their original indices.
-// Returns the first error encountered, if any.
-func collectToSlice[R any](resultChan <-chan Result[R, int], results []R) error {
-	var collectionErr error
-	for result := range resultChan {
-		if result.Error != nil {
-			collectionErr = result.Error
-			continue
-		}
-		if result.Key >= 0 && result.Key < len(results) {
-			results[result.Key] = result.Value
-		}
-	}
-	return collectionErr
 }
 
 // collectToMap collects results from a channel into a map.
