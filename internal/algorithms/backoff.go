@@ -38,7 +38,7 @@ func newDecorrelatedJitterBackoff(initialDelay, maxDelay time.Duration) *decorre
 		initialDelay: initialDelay,
 		maxDelay:     maxDelay,
 		prevDelay:    initialDelay,
-		rng:          rand.New(rand.NewSource(time.Now().UnixNano())),
+		rng:          rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404 -- crypto rand not needed for backoff jitter
 	}
 }
 
@@ -101,7 +101,7 @@ func newJitteredBackoff(initialDelay, maxDelay time.Duration, jitterFactor float
 		initialDelay: initialDelay,
 		maxDelay:     maxDelay,
 		jitterFactor: clamp(jitterFactor, 0, 1),
-		rng:          rand.New(rand.NewSource(time.Now().UnixNano())),
+		rng:          rand.New(rand.NewSource(time.Now().UnixNano())), // #nosec G404 -- crypto rand not needed for backoff jitter
 	}
 }
 
