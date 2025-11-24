@@ -1,9 +1,15 @@
 package pool
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
+)
+
+var (
+	ErrShutdownTimeout = errors.New("error in shutting down: timeout reached")
 )
 
 // calcBackoffDelay calculates the exponential backoff delay for retry attempts.
@@ -83,4 +89,27 @@ func checkfuncs[T any, R any](
 	}
 
 	return beforeTaskStart, onTaskEnd, onRetry
+}
+
+// waitUntil blocks until either the done channel is closed or the timeout is reached.
+// It is used during graceful shutdown to wait for workers to complete their tasks.
+func waitUntil(d <-chan struct{}, timeout time.Duration) error {
+	select {
+	case <-d:
+		return nil
+	case <-time.After(timeout):
+		return ErrShutdownTimeout
+	}
+}
+
+// executeSubmitted executes a submitted task and sends the result to its associated future.
+// This function is called by workers to process tasks that were submitted via SubmitWithFuture.
+// It wraps the task execution logic and ensures the result is properly delivered to the waiting future.
+func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], pool *WorkerPool[T, R], executor ProcessFunc[T, R]) {
+	result, err := executeTask(ctx, pool, s.task, executor)
+	s.future.result <- Result[R, int64]{
+		Value: result,
+		Error: err,
+		Key:   s.id,
+	}
 }
