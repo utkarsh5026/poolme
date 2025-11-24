@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/utkarsh5026/poolme/internal/algorithms"
 	"golang.org/x/time/rate"
 )
 
@@ -47,6 +48,8 @@ type WorkerPool[T any, R any] struct {
 	onTaskEnd       func(T, R, error)
 	onRetry         func(T, int, error)
 
+	backoffStrategy algorithms.BackoffStrategy
+
 	mu        sync.RWMutex
 	state     *poolState[T, R]
 	processFn ProcessFunc[T, R]
@@ -75,10 +78,14 @@ type WorkerPool[T any, R any] struct {
 //	)
 func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 	cfg := &workerPoolConfig{
-		workerCount:  runtime.GOMAXPROCS(0),
-		taskBuffer:   0, // Will be set to workerCount if not specified
-		maxAttempts:  1,
-		initialDelay: 0,
+		workerCount:         runtime.GOMAXPROCS(0),
+		taskBuffer:          0, // Will be set to workerCount if not specified
+		maxAttempts:         1,
+		initialDelay:        0,
+		backoffType:         BackoffExponential, // Default backoff
+		backoffInitialDelay: 100 * time.Millisecond,
+		backoffMaxDelay:     5 * time.Second,
+		backoffJitterFactor: 0.1, // Default 10% jitter for jittered backoff
 	}
 
 	for _, opt := range opts {
@@ -88,6 +95,17 @@ func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 	if cfg.taskBuffer == 0 {
 		cfg.taskBuffer = cfg.workerCount
 	}
+
+	if cfg.retryPolicySet {
+		cfg.backoffInitialDelay = cfg.initialDelay
+	}
+
+	backoffStrategy := algorithms.NewBackoffStrategy(
+		cfg.backoffType,
+		cfg.backoffInitialDelay,
+		cfg.backoffMaxDelay,
+		cfg.backoffJitterFactor,
+	)
 
 	var zeroT T
 	var zeroR R
@@ -106,6 +124,7 @@ func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 		onTaskEnd:       onTaskEnd,
 		onRetry:         onRetry,
 		continueOnError: cfg.continueOnError,
+		backoffStrategy: backoffStrategy,
 	}
 }
 
