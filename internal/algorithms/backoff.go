@@ -43,21 +43,8 @@ func (jb *jitteredBackoff) NextDelay(attemptNumber int, lastError error) time.Du
 		return 0
 	}
 
-	var baseDelay time.Duration
-	if attemptNumber >= maxAttempts {
-		baseDelay = jb.maxDelay
-	} else {
-		backoffFactor := int64(1) << uint(attemptNumber)
-		baseDelay = time.Duration(backoffFactor) * jb.initialDelay
-		if baseDelay > jb.maxDelay || baseDelay < 0 {
-			baseDelay = jb.maxDelay
-		}
-	}
+	baseDelay := calcExponentialDelay(attemptNumber, jb.initialDelay, jb.maxDelay)
 
-	// Add jitter: delay * (1 ± jitterFactor)
-	// Example: if jitterFactor = 0.1 and base = 1s
-	//   random value in [-0.1, 0.1] → multiplier in [0.9, 1.1]
-	//   result: 900ms to 1100ms
 	jb.mu.Lock()
 	jitterMultiplier := 1.0 + (jb.rng.Float64()*2-1)*jb.jitterFactor
 	jb.mu.Unlock()
@@ -69,4 +56,56 @@ func (jb *jitteredBackoff) NextDelay(attemptNumber int, lastError error) time.Du
 // Reset does nothing for jittered backoff (RNG state doesn't need reset).
 func (jb *jitteredBackoff) Reset() {
 	// No state to reset (RNG state doesn't need reset)
+}
+
+// exponentialBackoff implements simple exponential backoff.
+// Delay formula: initialDelay * 2^attemptNumber
+//
+// This is the default and simplest backoff strategy. Delays grow exponentially:
+// Attempt 0: 1x initialDelay
+// Attempt 1: 2x initialDelay
+// Attempt 2: 4x initialDelay
+// Attempt 3: 8x initialDelay
+// ...until maxDelay is reached
+type exponentialBackoff struct {
+	initialDelay time.Duration
+	maxDelay     time.Duration
+}
+
+// newExponentialBackoff creates a new exponential backoff strategy.
+func newExponentialBackoff(initialDelay, maxDelay time.Duration) *exponentialBackoff {
+	return &exponentialBackoff{
+		initialDelay: initialDelay,
+		maxDelay:     maxDelay,
+	}
+}
+
+// NextDelay calculates the exponential backoff delay for the given attempt number.
+// Uses bit shifting (2^n) for performance instead of math.Pow.
+func (eb *exponentialBackoff) NextDelay(attemptNumber int, lastError error) time.Duration {
+	return calcExponentialDelay(attemptNumber, eb.initialDelay, eb.maxDelay)
+}
+
+// Reset does nothing for exponential backoff as it has no internal state.
+func (eb *exponentialBackoff) Reset() {
+	// No state to reset
+}
+
+func calcExponentialDelay(attemptNumber int, initialDelay, maxDelay time.Duration) time.Duration {
+	if attemptNumber < 0 {
+		return 0
+	}
+
+	if attemptNumber >= maxAttempts {
+		return maxDelay
+	}
+
+	backoffFactor := int64(1) << uint(attemptNumber)
+	delay := time.Duration(backoffFactor) * initialDelay
+
+	if delay > maxDelay || delay < 0 {
+		return maxDelay
+	}
+
+	return delay
 }
