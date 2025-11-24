@@ -566,8 +566,19 @@ Tested on Intel i7-11800H @ 2.30GHz (16 cores):
 **Run benchmarks:**
 
 ```bash
-go test -bench=BenchmarkComprehensive -benchmem ./pool/
+# Run all comprehensive benchmarks
+go test -bench=BenchmarkComprehensive -benchmem ./benchmarks/
+
+# Run specific benchmark categories
+go test -bench=BenchmarkComprehensive_Throughput -benchmem ./benchmarks/
+go test -bench=BenchmarkComprehensive_Modes -benchmem ./benchmarks/
+go test -bench=BenchmarkComprehensive_Features -benchmem ./benchmarks/
+go test -bench=BenchmarkComprehensive_Workload -benchmem ./benchmarks/
+go test -bench=BenchmarkComprehensive_Memory -benchmem ./benchmarks/
+go test -bench=BenchmarkComprehensive_Scenario -benchmem ./benchmarks/
 ```
+
+**Note:** The comprehensive benchmarks are located in the [benchmarks](./benchmarks) directory as a separate package for better organization and modularity.
 
 <br/>
 
