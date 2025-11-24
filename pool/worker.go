@@ -91,7 +91,7 @@ func processWithRecovery[T, R any](
 }
 
 // processWithRetry executes the given processFn for the task, retrying up to wp.maxAttempts times on error.
-// It uses exponential backoff with an initial delay of wp.initialDelay between retries (if initialDelay > 0).
+// It uses the configured backoff strategy to calculate delays between retries.
 // If wp.onRetry is set, it is called before each retry (i.e., on every failure except the last).
 // The function will respect context cancellation and abort early if the context is done.
 // On success, it returns the result and nil error; otherwise, the final error is returned (after retries).
@@ -104,6 +104,7 @@ func processWithRetry[T, R any](
 	var result R
 	var err error
 	maxAttempts := max(wp.maxAttempts, 1)
+
 	for attempt := range maxAttempts {
 		select {
 		case <-ctx.Done():
@@ -111,12 +112,14 @@ func processWithRetry[T, R any](
 		default:
 		}
 
-		if attempt > 0 && wp.initialDelay > 0 {
-			delay := calcBackoffDelay(wp.initialDelay, attempt-1)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return result, ctx.Err()
+		if attempt > 0 && wp.backoffStrategy != nil {
+			delay := wp.backoffStrategy.NextDelay(attempt-1, err)
+			if delay > 0 {
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return result, ctx.Err()
+				}
 			}
 		}
 
