@@ -51,6 +51,9 @@ type WorkerPool[T any, R any] struct {
 
 	backoffStrategy algorithms.BackoffStrategy
 
+	usePq  bool
+	pqFunc func(a any) int
+
 	mu    sync.RWMutex
 	state *poolState[T, R]
 }
@@ -125,6 +128,8 @@ func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 		onRetry:         onRetry,
 		continueOnError: cfg.continueOnError,
 		backoffStrategy: backoffStrategy,
+		usePq:           cfg.usePq,
+		pqFunc:          cfg.pqFunc,
 	}
 }
 
@@ -303,9 +308,22 @@ func (wp *WorkerPool[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, 
 		return errors.New("pool already started")
 	}
 
+	var strategy SchedulingStrategy[T, R]
+	if wp.usePq {
+		if wp.pqFunc == nil {
+			return errors.New("priority queue enabled but no priority function provided")
+		}
+		priorityFunc := func(task T) int {
+			return wp.pqFunc(task)
+		}
+		strategy = newPriorityQueueStrategy(wp, processFn, priorityFunc)
+	} else {
+		strategy = NewChannelStrategy(wp, processFn)
+	}
+
 	state := &poolState[T, R]{
 		ctx:      ctx,
-		strategy: NewChannelStrategy(wp, processFn),
+		strategy: strategy,
 	}
 
 	wp.state = state

@@ -47,6 +47,9 @@ type workerPoolConfig struct {
 	backoffJitterFactor float64
 	retryPolicySet      bool // Track if WithRetryPolicy was explicitly called
 
+	usePq  bool
+	pqFunc func(a any) int
+
 	// Hook functions stored as any for flexibility
 	beforeTaskStart     func(any)
 	beforeTaskStartType string
@@ -281,6 +284,18 @@ func WithDecorrelatedJitter(initialDelay, maxDelay time.Duration) WorkerPoolOpti
 		cfg.backoffType = BackoffDecorrelated
 		cfg.backoffInitialDelay = initialDelay
 		cfg.backoffMaxDelay = maxDelay
+	}
+}
+
+func WithPriorityQueue[T any](checkPrior func(a T) int) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.usePq = true
+		cfg.pqFunc = func(a any) int {
+			if t, ok := a.(T); ok {
+				return checkPrior(t)
+			}
+			return 0
+		}
 	}
 }
 
