@@ -1,4 +1,4 @@
-package pool
+package benchmarks
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/utkarsh5026/poolme/pool"
 )
 
 // =============================================================================
@@ -88,7 +90,7 @@ func BenchmarkComprehensive_ThroughputWorkerScaling(b *testing.B) {
 					tasks[j] = j
 				}
 
-				wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+				wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 				_, err := wp.Process(context.Background(), tasks, processFunc)
 				if err != nil {
 					b.Fatal(err)
@@ -122,7 +124,7 @@ func BenchmarkComprehensive_ThroughputLoadScaling(b *testing.B) {
 					tasks[j] = j
 				}
 
-				wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+				wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 				_, err := wp.Process(context.Background(), tasks, processFunc)
 				if err != nil {
 					b.Fatal(err)
@@ -160,12 +162,12 @@ func BenchmarkComprehensive_ThroughputBufferSize(b *testing.B) {
 					tasks[j] = j
 				}
 
-				opts := []WorkerPoolOption{WithWorkerCount(workers)}
+				opts := []pool.WorkerPoolOption{pool.WithWorkerCount(workers)}
 				if bufferSize > 0 {
-					opts = append(opts, WithTaskBuffer(bufferSize))
+					opts = append(opts, pool.WithTaskBuffer(bufferSize))
 				}
 
-				wp := NewWorkerPool[int, int](opts...)
+				wp := pool.NewWorkerPool[int, int](opts...)
 				_, err := wp.Process(context.Background(), tasks, processFunc)
 				if err != nil {
 					b.Fatal(err)
@@ -191,7 +193,7 @@ func BenchmarkComprehensive_ModesProcess(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+		wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 		_, err := wp.Process(context.Background(), tasks, processFunc)
 		if err != nil {
 			b.Fatal(err)
@@ -211,7 +213,7 @@ func BenchmarkComprehensive_ModesProcessMap(b *testing.B) {
 			tasks[fmt.Sprintf("task_%d", j)] = j
 		}
 
-		wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+		wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 		_, err := wp.ProcessMap(context.Background(), tasks, processFunc)
 		if err != nil {
 			b.Fatal(err)
@@ -236,7 +238,7 @@ func BenchmarkComprehensive_ModesProcessStream(b *testing.B) {
 			close(taskChan)
 		}()
 
-		wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+		wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 		resultChan, errChan := wp.ProcessStream(context.Background(), taskChan, processFunc)
 
 		// Consume results
@@ -282,7 +284,7 @@ func BenchmarkComprehensive_FeaturesBaseline(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+		wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 		_, err := wp.Process(context.Background(), tasks, processFunc)
 		if err != nil {
 			b.Fatal(err)
@@ -302,9 +304,9 @@ func BenchmarkComprehensive_FeaturesWithRetry(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](
-			WithWorkerCount(workers),
-			WithRetryPolicy(3, 10*time.Millisecond),
+		wp := pool.NewWorkerPool[int, int](
+			pool.WithWorkerCount(workers),
+			pool.WithRetryPolicy(3, 10*time.Millisecond),
 		)
 		_, err := wp.Process(context.Background(), tasks, processFunc)
 		if err != nil {
@@ -329,9 +331,9 @@ func BenchmarkComprehensive_FeaturesWithRateLimit(b *testing.B) {
 					tasks[j] = j
 				}
 
-				wp := NewWorkerPool[int, int](
-					WithWorkerCount(workers),
-					WithRateLimit(float64(rateLimit), rateLimit/10),
+				wp := pool.NewWorkerPool[int, int](
+					pool.WithWorkerCount(workers),
+					pool.WithRateLimit(float64(rateLimit), rateLimit/10),
 				)
 				_, err := wp.Process(context.Background(), tasks, processFunc)
 				if err != nil {
@@ -356,12 +358,12 @@ func BenchmarkComprehensive_FeaturesWithHooks(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](
-			WithWorkerCount(workers),
-			WithBeforeTaskStart(func(task int) {
+		wp := pool.NewWorkerPool[int, int](
+			pool.WithWorkerCount(workers),
+			pool.WithBeforeTaskStart(func(task int) {
 				hookCalls.Add(1)
 			}),
-			WithOnTaskEnd(func(task int, result int, err error) {
+			pool.WithOnTaskEnd(func(task int, result int, err error) {
 				hookCalls.Add(1)
 			}),
 		)
@@ -396,9 +398,9 @@ func BenchmarkComprehensive_FeaturesContinueOnError(b *testing.B) {
 				tasks[j] = j
 			}
 
-			wp := NewWorkerPool[int, int](
-				WithWorkerCount(workers),
-				WithContinueOnError(false),
+			wp := pool.NewWorkerPool[int, int](
+				pool.WithWorkerCount(workers),
+				pool.WithContinueOnError(false),
 			)
 			wp.Process(context.Background(), tasks, processFunc)
 			// Ignore error as we expect it
@@ -413,9 +415,9 @@ func BenchmarkComprehensive_FeaturesContinueOnError(b *testing.B) {
 				tasks[j] = j
 			}
 
-			wp := NewWorkerPool[int, int](
-				WithWorkerCount(workers),
-				WithContinueOnError(true),
+			wp := pool.NewWorkerPool[int, int](
+				pool.WithWorkerCount(workers),
+				pool.WithContinueOnError(true),
 			)
 			wp.Process(context.Background(), tasks, processFunc)
 			// Ignore error as some tasks are expected to fail
@@ -443,7 +445,7 @@ func BenchmarkComprehensive_WorkloadCPUBound(b *testing.B) {
 					tasks[j] = j
 				}
 
-				wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+				wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 				_, err := wp.Process(context.Background(), tasks, processFunc)
 				if err != nil {
 					b.Fatal(err)
@@ -473,7 +475,7 @@ func BenchmarkComprehensive_WorkloadIOBound(b *testing.B) {
 					tasks[j] = j
 				}
 
-				wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+				wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 				_, err := wp.Process(context.Background(), tasks, processFunc)
 				if err != nil {
 					b.Fatal(err)
@@ -495,7 +497,7 @@ func BenchmarkComprehensive_WorkloadMixed(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+		wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 		_, err := wp.Process(context.Background(), tasks, processFunc)
 		if err != nil {
 			b.Fatal(err)
@@ -521,7 +523,7 @@ func BenchmarkComprehensive_MemoryAllocationPerTask(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+		wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 		_, err := wp.Process(context.Background(), tasks, processFunc)
 		if err != nil {
 			b.Fatal(err)
@@ -536,7 +538,7 @@ func BenchmarkComprehensive_MemoryAllocationPerTask(b *testing.B) {
 		for j := range tasks {
 			tasks[j] = j
 		}
-		wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+		wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 		wp.Process(context.Background(), tasks, processFunc)
 	})
 	b.ReportMetric(totalBytes/float64(taskCount), "allocs/task")
@@ -558,7 +560,7 @@ func BenchmarkComprehensive_MemoryTaskScaling(b *testing.B) {
 					tasks[j] = j
 				}
 
-				wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+				wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 				_, err := wp.Process(context.Background(), tasks, processFunc)
 				if err != nil {
 					b.Fatal(err)
@@ -599,7 +601,7 @@ func BenchmarkComprehensive_LatencyDistribution(b *testing.B) {
 		tasks[j] = j
 	}
 
-	wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+	wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 	_, err := wp.Process(context.Background(), tasks, processWithLatency)
 	if err != nil {
 		b.Fatal(err)
@@ -648,9 +650,9 @@ func BenchmarkComprehensive_ScenarioWebAPIProcessing(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](
-			WithWorkerCount(workers),
-			WithRateLimit(1000, 100), // Rate limit to avoid overwhelming API
+		wp := pool.NewWorkerPool[int, int](
+			pool.WithWorkerCount(workers),
+			pool.WithRateLimit(1000, 100), // Rate limit to avoid overwhelming API
 		)
 		_, err := wp.Process(context.Background(), tasks, processFunc)
 		if err != nil {
@@ -687,9 +689,9 @@ func BenchmarkComprehensive_ScenarioDataPipeline(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](
-			WithWorkerCount(workers),
-			WithTaskBuffer(workers*2),
+		wp := pool.NewWorkerPool[int, int](
+			pool.WithWorkerCount(workers),
+			pool.WithTaskBuffer(workers*2),
 		)
 		_, err := wp.Process(context.Background(), tasks, processFunc)
 		if err != nil {
@@ -730,10 +732,10 @@ func BenchmarkComprehensive_ScenarioBatchJobProcessing(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](
-			WithWorkerCount(workers),
-			WithRetryPolicy(3, 100*time.Millisecond),
-			WithContinueOnError(true),
+		wp := pool.NewWorkerPool[int, int](
+			pool.WithWorkerCount(workers),
+			pool.WithRetryPolicy(3, 100*time.Millisecond),
+			pool.WithContinueOnError(true),
 		)
 		_, err := wp.Process(context.Background(), tasks, processFunc)
 		if err != nil {
@@ -780,7 +782,7 @@ func BenchmarkComprehensive_ComparisonWorkerPool(b *testing.B) {
 			tasks[j] = j
 		}
 
-		wp := NewWorkerPool[int, int](WithWorkerCount(workers))
+		wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
 		_, err := wp.Process(context.Background(), tasks, processFunc)
 		if err != nil {
 			b.Fatal(err)
