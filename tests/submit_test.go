@@ -8,10 +8,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/utkarsh5026/poolme/pool"
 )
 
 func TestWorkerPool_Submit_BasicFunctionality(t *testing.T) {
-	pool := NewWorkerPool[int, string](WithWorkerCount(2))
+	pool := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
 
 	processFn := func(ctx context.Context, task int) (string, error) {
 		return fmt.Sprintf("result-%d", task), nil
@@ -41,24 +43,23 @@ func TestWorkerPool_Submit_BasicFunctionality(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_MultipleSubmissions(t *testing.T) {
-	pool := NewWorkerPool[int, int](WithWorkerCount(4))
+	p := pool.NewWorkerPool[int, int](pool.WithWorkerCount(4))
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		return task * 2, nil
 	}
 
-	err := pool.Start(context.Background(), processFn)
+	err := p.Start(context.Background(), processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
-	defer pool.Shutdown(2 * time.Second)
-
+	defer p.Shutdown(2 * time.Second)
 	// Submit multiple tasks
 	numTasks := 100
-	futures := make([]*Future[int, int64], numTasks)
+	futures := make([]*pool.Future[int, int64], numTasks)
 
-	for i := 0; i < numTasks; i++ {
-		future, err := pool.Submit(i)
+	for i := range numTasks {
+		future, err := p.Submit(i)
 		if err != nil {
 			t.Fatalf("failed to submit task %d: %v", i, err)
 		}
@@ -79,7 +80,7 @@ func TestWorkerPool_Submit_MultipleSubmissions(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_ErrorHandling(t *testing.T) {
-	pool := NewWorkerPool[int, string](WithWorkerCount(2))
+	p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
 
 	processFn := func(ctx context.Context, task int) (string, error) {
 		if task%2 == 0 {
@@ -88,14 +89,14 @@ func TestWorkerPool_Submit_ErrorHandling(t *testing.T) {
 		return fmt.Sprintf("success-%d", task), nil
 	}
 
-	err := pool.Start(context.Background(), processFn)
+	err := p.Start(context.Background(), processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
-	defer pool.Shutdown(time.Second)
+	defer p.Shutdown(time.Second)
 
 	// Submit task that will fail
-	future1, err := pool.Submit(2)
+	future1, err := p.Submit(2)
 	if err != nil {
 		t.Fatalf("failed to submit task: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestWorkerPool_Submit_ErrorHandling(t *testing.T) {
 	}
 
 	// Submit task that will succeed
-	future2, err := pool.Submit(3)
+	future2, err := p.Submit(3)
 	if err != nil {
 		t.Fatalf("failed to submit task: %v", err)
 	}
@@ -124,9 +125,9 @@ func TestWorkerPool_Submit_ErrorHandling(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_BeforeStart(t *testing.T) {
-	pool := NewWorkerPool[int, string]()
+	p := pool.NewWorkerPool[int, string]()
 
-	_, err := pool.Submit(42)
+	_, err := p.Submit(42)
 	if err == nil {
 		t.Error("expected error when submitting before Start")
 	}
@@ -136,23 +137,22 @@ func TestWorkerPool_Submit_BeforeStart(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_AfterShutdown(t *testing.T) {
-	pool := NewWorkerPool[int, string](WithWorkerCount(2))
-
+	p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
 	processFn := func(ctx context.Context, task int) (string, error) {
 		return "result", nil
 	}
 
-	err := pool.Start(context.Background(), processFn)
+	err := p.Start(context.Background(), processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
 
-	err = pool.Shutdown(time.Second)
+	err = p.Shutdown(time.Second)
 	if err != nil {
 		t.Fatalf("failed to shutdown pool: %v", err)
 	}
 
-	_, err = pool.Submit(42)
+	_, err = p.Submit(42)
 	if err == nil {
 		t.Error("expected error when submitting after shutdown")
 	}
@@ -164,9 +164,9 @@ func TestWorkerPool_Submit_AfterShutdown(t *testing.T) {
 func TestWorkerPool_Submit_WithRetry(t *testing.T) {
 	var attemptCount atomic.Int32
 
-	pool := NewWorkerPool[int, string](
-		WithWorkerCount(1),
-		WithRetryPolicy(3, 10*time.Millisecond),
+	p := pool.NewWorkerPool[int, string](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(3, 10*time.Millisecond),
 	)
 
 	processFn := func(ctx context.Context, task int) (string, error) {
@@ -177,13 +177,13 @@ func TestWorkerPool_Submit_WithRetry(t *testing.T) {
 		return "success", nil
 	}
 
-	err := pool.Start(context.Background(), processFn)
+	err := p.Start(context.Background(), processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
-	defer pool.Shutdown(time.Second)
+	defer p.Shutdown(time.Second)
 
-	future, err := pool.Submit(1)
+	future, err := p.Submit(1)
 	if err != nil {
 		t.Fatalf("failed to submit task: %v", err)
 	}
@@ -207,16 +207,16 @@ func TestWorkerPool_Submit_WithHooks(t *testing.T) {
 	var endCount atomic.Int32
 	var retryCount atomic.Int32
 
-	pool := NewWorkerPool[int, string](
-		WithWorkerCount(1),
-		WithRetryPolicy(2, 10*time.Millisecond),
-		WithBeforeTaskStart(func(task int) {
+	p := pool.NewWorkerPool[int, string](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(2, 10*time.Millisecond),
+		pool.WithBeforeTaskStart(func(task int) {
 			beforeCount.Add(1)
 		}),
-		WithOnTaskEnd(func(task int, result string, err error) {
+		pool.WithOnTaskEnd(func(task int, result string, err error) {
 			endCount.Add(1)
 		}),
-		WithOnEachAttempt(func(task int, attempt int, err error) {
+		pool.WithOnEachAttempt(func(task int, attempt int, err error) {
 			retryCount.Add(1)
 		}),
 	)
@@ -229,13 +229,12 @@ func TestWorkerPool_Submit_WithHooks(t *testing.T) {
 		return "success", nil
 	}
 
-	err := pool.Start(context.Background(), processFn)
+	err := p.Start(context.Background(), processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
-	defer pool.Shutdown(time.Second)
-
-	future, err := pool.Submit(42)
+	defer p.Shutdown(time.Second)
+	future, err := p.Submit(42)
 	if err != nil {
 		t.Fatalf("failed to submit task: %v", err)
 	}
@@ -263,18 +262,18 @@ func TestWorkerPool_Submit_WithHooks(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_ConcurrentSubmissions(t *testing.T) {
-	pool := NewWorkerPool[int, int](WithWorkerCount(8))
+	p := pool.NewWorkerPool[int, int](pool.WithWorkerCount(8))
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		time.Sleep(10 * time.Millisecond)
 		return task * task, nil
 	}
 
-	err := pool.Start(context.Background(), processFn)
+	err := p.Start(context.Background(), processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
-	defer pool.Shutdown(5 * time.Second)
+	defer p.Shutdown(5 * time.Second)
 
 	numGoroutines := 50
 	tasksPerGoroutine := 10
@@ -283,14 +282,14 @@ func TestWorkerPool_Submit_ConcurrentSubmissions(t *testing.T) {
 	results := make(chan int, numGoroutines*tasksPerGoroutine)
 	errors := make(chan error, numGoroutines*tasksPerGoroutine)
 
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		wg.Add(1)
 		go func(gID int) {
 			defer wg.Done()
 
-			for i := 0; i < tasksPerGoroutine; i++ {
+			for i := range tasksPerGoroutine {
 				task := gID*tasksPerGoroutine + i
-				future, err := pool.Submit(task)
+				future, err := p.Submit(task)
 				if err != nil {
 					errors <- err
 					continue
@@ -334,7 +333,7 @@ func TestWorkerPool_Submit_ConcurrentSubmissions(t *testing.T) {
 func TestWorkerPool_Submit_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	pool := NewWorkerPool[int, string](WithWorkerCount(2))
+	p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
 
 	processFn := func(ctx context.Context, task int) (string, error) {
 		select {
@@ -345,13 +344,13 @@ func TestWorkerPool_Submit_ContextCancellation(t *testing.T) {
 		}
 	}
 
-	err := pool.Start(ctx, processFn)
+	err := p.Start(ctx, processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
-	defer pool.Shutdown(time.Second)
+	defer p.Shutdown(time.Second)
 
-	future, err := pool.Submit(1)
+	future, err := p.Submit(1)
 	if err != nil {
 		t.Fatalf("failed to submit task: %v", err)
 	}
@@ -368,14 +367,14 @@ func TestWorkerPool_Submit_ContextCancellation(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_LongRunningStability(t *testing.T) {
-	pool := NewWorkerPool[int, int](WithWorkerCount(4))
+	p := pool.NewWorkerPool[int, int](pool.WithWorkerCount(4))
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		time.Sleep(time.Millisecond)
 		return task + 1, nil
 	}
 
-	err := pool.Start(context.Background(), processFn)
+	err := p.Start(context.Background(), processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
@@ -384,12 +383,12 @@ func TestWorkerPool_Submit_LongRunningStability(t *testing.T) {
 	numWaves := 10
 	tasksPerWave := 50
 
-	for wave := 0; wave < numWaves; wave++ {
-		futures := make([]*Future[int, int64], tasksPerWave)
+	for wave := range numWaves {
+		futures := make([]*pool.Future[int, int64], tasksPerWave)
 
 		// Submit wave
-		for i := 0; i < tasksPerWave; i++ {
-			future, err := pool.Submit(i)
+		for i := range tasksPerWave {
+			future, err := p.Submit(i)
 			if err != nil {
 				t.Fatalf("wave %d, task %d: failed to submit: %v", wave, i, err)
 			}
@@ -408,27 +407,26 @@ func TestWorkerPool_Submit_LongRunningStability(t *testing.T) {
 		}
 	}
 
-	err = pool.Shutdown(5 * time.Second)
+	err = p.Shutdown(5 * time.Second)
 	if err != nil {
 		t.Errorf("shutdown failed: %v", err)
 	}
 }
 
 func TestWorkerPool_Submit_WithGetWithContext(t *testing.T) {
-	pool := NewWorkerPool[int, string](WithWorkerCount(2))
+	p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
 
 	processFn := func(ctx context.Context, task int) (string, error) {
 		time.Sleep(100 * time.Millisecond)
 		return fmt.Sprintf("result-%d", task), nil
 	}
 
-	err := pool.Start(context.Background(), processFn)
+	err := p.Start(context.Background(), processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
-	defer pool.Shutdown(time.Second)
-
-	future, err := pool.Submit(42)
+	defer p.Shutdown(time.Second)
+	future, err := p.Submit(42)
 	if err != nil {
 		t.Fatalf("failed to submit task: %v", err)
 	}
@@ -450,22 +448,21 @@ func TestWorkerPool_Submit_WithGetWithContext(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_TaskIDIncrement(t *testing.T) {
-	pool := NewWorkerPool[int, int](WithWorkerCount(1))
+	p := pool.NewWorkerPool[int, int](pool.WithWorkerCount(1))
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		return task, nil
 	}
 
-	err := pool.Start(context.Background(), processFn)
+	err := p.Start(context.Background(), processFn)
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
-	defer pool.Shutdown(time.Second)
-
+	defer p.Shutdown(time.Second)
 	// Submit multiple tasks and check IDs increment
 	numTasks := 10
-	for i := 0; i < numTasks; i++ {
-		future, err := pool.Submit(i)
+	for i := range numTasks {
+		future, err := p.Submit(i)
 		if err != nil {
 			t.Fatalf("failed to submit task %d: %v", i, err)
 		}

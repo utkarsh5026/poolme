@@ -197,7 +197,7 @@ func TestWorkerPool_RateLimit_ProcessMap(t *testing.T) {
 	}
 
 	tasks := make(map[string]int)
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		tasks[fmt.Sprintf("task-%d", i)] = i
 	}
 
