@@ -1,14 +1,9 @@
 package pool
 
 import (
+	"container/heap"
 	"context"
-	"errors"
 	"sync"
-	"time"
-)
-
-var (
-	ErrShutdownTimeout = errors.New("error in shutting down: timeout reached")
 )
 
 // SchedulingStrategy defines the behavior for distributing tasks to workers.
@@ -86,21 +81,88 @@ func (s *ChannelStrategy[T, R]) worker(ctx context.Context) {
 				return
 			}
 
-			result, err := executeTask(ctx, s.pool, t.task, s.executor)
-			t.future.result <- Result[R, int64]{
-				Value: result,
-				Error: err,
-				Key:   t.id,
+			executeSubmitted(ctx, t, s.pool, s.executor)
+		}
+	}
+}
+
+type priorityQueueStrategy[T any, R any] struct {
+	pq            *priorityQueue[T, R]
+	executor      ProcessFunc[T, R]
+	mu            sync.Mutex
+	pool          *WorkerPool[T, R]
+	wg            sync.WaitGroup
+	availableChan chan struct{}
+}
+
+func newPriorityQueueStrategy[T any, R any](pool *WorkerPool[T, R], executor ProcessFunc[T, R], checkPrior func(a T) int) *priorityQueueStrategy[T, R] {
+	return &priorityQueueStrategy[T, R]{
+		pq:            newPriorityQueue(make([]*submittedTask[T, R], 0), checkPrior),
+		executor:      executor,
+		pool:          pool,
+		availableChan: make(chan struct{}, pool.workerCount),
+	}
+}
+
+func (s *priorityQueueStrategy[T, R]) Start(ctx context.Context, workers int) error {
+	s.wg.Add(workers)
+
+	for range workers {
+		go func() {
+			defer s.wg.Done()
+			s.worker(ctx)
+		}()
+	}
+
+	return nil
+}
+
+func (s *priorityQueueStrategy[T, R]) Submit(ctx context.Context, task *submittedTask[T, R]) error {
+	s.mu.Lock()
+	heap.Push(s.pq, task)
+	s.mu.Unlock()
+
+	select {
+	case s.availableChan <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *priorityQueueStrategy[T, R]) worker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case _, ok := <-s.availableChan:
+			if !ok {
+				return
+			}
+
+			for {
+				s.mu.Lock()
+				if s.pq.Len() == 0 {
+					s.mu.Unlock()
+					break
+				}
+				item := heap.Pop(s.pq).(*submittedTask[T, R])
+				s.mu.Unlock()
+				executeSubmitted(ctx, item, s.pool, s.executor)
 			}
 		}
 	}
 }
 
-func waitUntil(d <-chan struct{}, timeout time.Duration) error {
-	select {
-	case <-d:
-		return nil
-	case <-time.After(timeout):
-		return ErrShutdownTimeout
-	}
+func (s *priorityQueueStrategy[T, R]) Shutdown() <-chan struct{} {
+	close(s.availableChan)
+
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	return done
 }
