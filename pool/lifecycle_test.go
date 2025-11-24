@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -164,7 +165,7 @@ func TestWorkerPool_Shutdown(t *testing.T) {
 
 		// Shutdown with zero timeout (wait indefinitely)
 		err = pool.Shutdown(0)
-		if err != nil {
+		if !errors.Is(err, ErrShutdownTimeout) {
 			t.Errorf("shutdown with zero timeout failed: %v", err)
 		}
 	})
@@ -253,7 +254,7 @@ func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
 		if err == nil {
 			t.Error("expected timeout error")
 		}
-		if err.Error() != "shutdown timeout exceeded" {
+		if !errors.Is(err, ErrShutdownTimeout) {
 			t.Errorf("expected 'shutdown timeout exceeded', got %v", err)
 		}
 

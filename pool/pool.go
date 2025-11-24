@@ -16,13 +16,14 @@ import (
 // poolState holds the runtime state for a long-running worker pool.
 // It manages worker goroutines, task/result channels, and lifecycle.
 type poolState[T any, R any] struct {
-	taskChan      chan *submittedTask[T, R]
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	// taskChan      chan *submittedTask[T, R]
+	ctx context.Context
+	// cancel        context.CancelFunc
+	// wg            sync.WaitGroup
 	started       atomic.Bool
 	shutdown      atomic.Bool
 	taskIDCounter atomic.Int64
+	strategy      SchedulingStrategy[T, R]
 }
 
 // WorkerPool is a generic, production-ready worker pool implementation.
@@ -50,9 +51,8 @@ type WorkerPool[T any, R any] struct {
 
 	backoffStrategy algorithms.BackoffStrategy
 
-	mu        sync.RWMutex
-	state     *poolState[T, R]
-	processFn ProcessFunc[T, R]
+	mu    sync.RWMutex
+	state *poolState[T, R]
 }
 
 // NewWorkerPool creates a new worker pool with the given options.
@@ -303,48 +303,15 @@ func (wp *WorkerPool[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, 
 		return errors.New("pool already started")
 	}
 
-	poolCtx, cancel := context.WithCancel(ctx)
 	state := &poolState[T, R]{
-		taskChan: make(chan *submittedTask[T, R], wp.taskBuffer),
-		ctx:      poolCtx,
-		cancel:   cancel,
+		ctx:      ctx,
+		strategy: NewChannelStrategy(wp, processFn),
 	}
 
 	wp.state = state
-	wp.processFn = processFn
 	state.started.Store(true)
 
-	for i := 0; i < wp.workerCount; i++ {
-		state.wg.Add(1)
-		go wp.runSubmitWorker(state, processFn)
-	}
-
-	return nil
-}
-
-// runSubmitWorker is a worker goroutine for long-running pool mode.
-// It processes submitted tasks and sends results to individual futures.
-func (wp *WorkerPool[T, R]) runSubmitWorker(state *poolState[T, R], processFn ProcessFunc[T, R]) {
-	defer state.wg.Done()
-
-	for {
-		select {
-		case <-state.ctx.Done():
-			return
-		case submittedTask, ok := <-state.taskChan:
-			if !ok {
-				return
-			}
-
-			result, err := executeTask(state.ctx, wp, submittedTask.task, processFn)
-
-			submittedTask.future.result <- Result[R, int64]{
-				Value: result,
-				Key:   submittedTask.id,
-				Error: err,
-			}
-		}
-	}
+	return state.strategy.Start(ctx, wp.workerCount)
 }
 
 // Submit submits a single task to the pool for asynchronous processing.
@@ -412,12 +379,8 @@ func (wp *WorkerPool[T, R]) Submit(task T) (*Future[R, int64], error) {
 		future: future,
 	}
 
-	select {
-	case state.taskChan <- st:
-		return future, nil
-	case <-state.ctx.Done():
-		return nil, state.ctx.Err()
-	}
+	err := state.strategy.Submit(state.ctx, st)
+	return future, err
 }
 
 // Shutdown gracefully shuts down the worker pool started with Start.
@@ -470,26 +433,5 @@ func (wp *WorkerPool[T, R]) Shutdown(timeout time.Duration) error {
 		return errors.New("pool already shut down")
 	}
 	wp.mu.Unlock()
-	close(state.taskChan)
-
-	done := make(chan struct{})
-	go func() {
-		state.wg.Wait()
-		close(done)
-	}()
-
-	if timeout > 0 {
-		select {
-		case <-done:
-			state.cancel()
-			return nil
-		case <-time.After(timeout):
-			state.cancel()
-			return errors.New("shutdown timeout exceeded")
-		}
-	}
-
-	<-done
-	state.cancel()
-	return nil
+	return waitUntil(state.strategy.Shutdown(), timeout)
 }
