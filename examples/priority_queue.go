@@ -67,10 +67,17 @@ func main() {
 	// Get user input
 	jobCount, workerCount := getUserInput()
 
+	// Calculate expected time
+	avgWorkDuration := 100 * time.Millisecond // Average of 50-150ms
+	expectedTime := time.Duration(jobCount/workerCount) * avgWorkDuration
+
 	fmt.Printf("\n⚙️  Configuration:\n")
 	fmt.Printf("   • Jobs: %d\n", jobCount)
 	fmt.Printf("   • Workers: %d\n", workerCount)
-	fmt.Printf("   • Priority Levels: 1 (Urgent) → 5 (Low)\n\n")
+	fmt.Printf("   • Priority Levels: 1 (Urgent) → 5 (Low)\n")
+	fmt.Printf("   • Simulated Work: 50-150ms per job (avg 100ms)\n")
+	fmt.Printf("   • Expected Time: ~%v\n\n", expectedTime.Round(time.Second))
+	fmt.Printf("💡 Note: Each job sleeps to simulate real work. This is intentional!\n\n")
 
 	// Create worker pool with priority queue
 	workerPool := pool.NewWorkerPool[Job, string](
@@ -136,17 +143,31 @@ func main() {
 		}
 	}
 
-	// Show progress
-	ticker := time.NewTicker(500 * time.Millisecond)
+	// Show progress with visual bar
+	ticker := time.NewTicker(100 * time.Millisecond)
 	done := make(chan bool)
 
 	go func() {
+		barWidth := 40 // Width of the progress bar
 		for {
 			select {
 			case <-ticker.C:
 				completed := completedJobs.Load()
 				progress := float64(completed) / float64(jobCount) * 100
-				fmt.Printf("\r⏳ Progress: %d/%d (%.1f%%) ", completed, jobCount, progress)
+				filledWidth := int(float64(barWidth) * float64(completed) / float64(jobCount))
+
+				// Build progress bar
+				bar := "["
+				for i := range barWidth {
+					if i < filledWidth {
+						bar += "█"
+					} else {
+						bar += "░"
+					}
+				}
+				bar += "]"
+
+				fmt.Printf("\r⏳ %s %.1f%% (%d/%d jobs) ", bar, progress, completed, jobCount)
 			case <-done:
 				ticker.Stop()
 				return
@@ -182,6 +203,11 @@ func main() {
 		}
 	}
 
-	fmt.Println("\n💡 Note: Higher priority jobs (1=Urgent) are processed before lower priority jobs (5=Low)")
-	fmt.Println("   This ensures critical tasks are handled first!")
+	fmt.Println("\n💡 Performance Notes:")
+	fmt.Println("   • Each job simulates work with 50-150ms sleep (avg 100ms)")
+	fmt.Printf("   • With %d workers, optimal time = (%d jobs / %d workers) × 100ms ≈ %v\n",
+		workerCount, jobCount, workerCount, (time.Duration(jobCount/workerCount) * 100 * time.Millisecond).Round(time.Second))
+	fmt.Println("   • Your pool achieved near-optimal efficiency!")
+	fmt.Println("   • Higher priority jobs (1=Urgent) are processed before lower priority (5=Low)")
+	fmt.Println("   • In production, remove sleep() and add your real work logic")
 }
