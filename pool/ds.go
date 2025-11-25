@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"runtime"
-	"sync"
 	"sync/atomic"
 )
 
@@ -66,99 +65,6 @@ func (pq *priorityQueue[T, R]) Pop() any {
 	item := old[n-1]
 	pq.queue = old[0 : n-1]
 	return item
-}
-
-// dequeue is a double-ended queue optimized for work-stealing algorithms.
-// It supports efficient push/pop operations from both ends with proper synchronization.
-type dequeue[T any, R any] struct {
-	tasks []*submittedTask[T, R]
-	mu    sync.Mutex
-}
-
-func newDequeue[T any, R any]() *dequeue[T, R] {
-	return &dequeue[T, R]{
-		tasks: make([]*submittedTask[T, R], 0, 16), // Pre-allocate some capacity
-	}
-}
-
-// Len returns the current number of tasks in the dequeue.
-// Note: This is not thread-safe and should only be used for debugging/monitoring.
-func (d *dequeue[T, R]) Len() int {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return len(d.tasks)
-}
-
-// PushFront adds a task to the front of the dequeue.
-// This is less common but useful for prioritizing certain tasks.
-func (d *dequeue[T, R]) PushFront(task *submittedTask[T, R]) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.tasks = append([]*submittedTask[T, R]{task}, d.tasks...)
-}
-
-// PushBack adds a task to the back of the dequeue.
-// This is the primary method for adding work to a worker's local queue.
-// Uses LIFO order when combined with PopBack for better cache locality.
-func (d *dequeue[T, R]) PushBack(task *submittedTask[T, R]) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.tasks = append(d.tasks, task)
-}
-
-// PopFront removes and returns a task from the front of the dequeue.
-// Returns nil if the dequeue is empty.
-//
-// This is used by:
-//   - Other workers when stealing work (FIFO from victim's perspective)
-//   - Global queue consumers
-//
-// The FIFO pattern for stealing reduces contention with the victim worker
-// who is doing LIFO (PopBack) on the same queue.
-func (d *dequeue[T, R]) PopFront() *submittedTask[T, R] {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.tasks) == 0 {
-		return nil
-	}
-	task := d.tasks[0]
-	d.tasks = d.tasks[1:]
-	return task
-}
-
-// PopBack removes and returns a task from the back of the dequeue.
-// Returns nil if the dequeue is empty.
-//
-// This is used by the local worker for its own queue (LIFO pattern).
-// LIFO provides better cache locality as recently added tasks are likely
-// to have related data still in CPU cache.
-func (d *dequeue[T, R]) PopBack() *submittedTask[T, R] {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.tasks) == 0 {
-		return nil
-	}
-	task := d.tasks[len(d.tasks)-1]
-	d.tasks = d.tasks[:len(d.tasks)-1]
-	return task
-}
-
-// TryPopFront attempts to pop from the front without blocking.
-// Returns (task, true) if successful, (nil, false) if empty or locked.
-// This is useful for non-blocking steal attempts.
-func (d *dequeue[T, R]) TryPopFront() (*submittedTask[T, R], bool) {
-	if !d.mu.TryLock() {
-		return nil, false
-	}
-	defer d.mu.Unlock()
-
-	if len(d.tasks) == 0 {
-		return nil, false
-	}
-
-	task := d.tasks[0]
-	d.tasks = d.tasks[1:]
-	return task, true
 }
 
 const (
