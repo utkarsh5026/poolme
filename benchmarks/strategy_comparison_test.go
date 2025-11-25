@@ -3,7 +3,6 @@ package benchmarks
 import (
 	"context"
 	"fmt"
-	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -966,28 +965,69 @@ func BenchmarkStrategy_TailLatency(b *testing.B) {
 	}
 }
 
-// Helper function to calculate percentile (from benchmark_test.go)
-// Duplicated here for completeness
-func percentileHelper(latencies []time.Duration, p float64) time.Duration {
-	if len(latencies) == 0 {
-		return 0
-	}
+// BenchmarkStrategy_ExtremeImbalance tests with VERY uneven task distribution
+// First half of workers get only light tasks, second half get only heavy tasks
+func BenchmarkStrategy_ExtremeImbalance(b *testing.B) {
+	workers := 8
+	taskCount := 5000
 
-	sorted := make([]time.Duration, len(latencies))
-	copy(sorted, latencies)
-
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[i] > sorted[j] {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
+	// EXTREME variable complexity - creates massive load imbalance
+	extremeComplexityWork := func(ctx context.Context, task int) (int, error) {
+		// First 20% of tasks are 100x heavier
+		iterations := 100
+		if task < taskCount/5 {
+			iterations = 10000 // 100x heavier!
 		}
+
+		result := 0
+		for i := 0; i < iterations; i++ {
+			result += i * task
+		}
+		return result, nil
 	}
 
-	index := int(math.Ceil(float64(len(sorted)) * p))
-	if index >= len(sorted) {
-		index = len(sorted) - 1
+	strategies := []struct {
+		name string
+		opts []pool.WorkerPoolOption
+	}{
+		{
+			name: "Channel",
+			opts: []pool.WorkerPoolOption{
+				pool.WithWorkerCount(workers),
+				pool.WithSchedulingStrategy(pool.SchedulingChannel),
+			},
+		},
+		{
+			name: "WorkStealing",
+			opts: []pool.WorkerPoolOption{
+				pool.WithWorkerCount(workers),
+				pool.WithWorkStealing(),
+			},
+		},
+		{
+			name: "MPMC",
+			opts: []pool.WorkerPoolOption{
+				pool.WithWorkerCount(workers),
+				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
+			},
+		},
 	}
 
-	return sorted[index]
+	for _, strategy := range strategies {
+		b.Run(strategy.name, func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				tasks := make([]int, taskCount)
+				for j := range tasks {
+					tasks[j] = j
+				}
+
+				wp := pool.NewWorkerPool[int, int](strategy.opts...)
+				_, err := wp.Process(context.Background(), tasks, extremeComplexityWork)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
