@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+const (
+	fastCheckCounter          = 3
+	defaultLocalQueueCapacity = 16
+	maxStealAttempts          = 4
+)
+
 type wsDeque[T, R any] struct {
 	// Ring buffer of tasks
 	ring atomic.Pointer[[]*submittedTask[T, R]]
@@ -31,7 +37,7 @@ type wsDeque[T, R any] struct {
 
 func newWSDeque[T, R any](capacity int) *wsDeque[T, R] {
 	if capacity <= 0 {
-		capacity = defaultInitialCapacity
+		capacity = defaultLocalQueueCapacity
 	}
 
 	capacity = nextPowerOfTwo(capacity)
@@ -176,28 +182,35 @@ func (s *workSteal[T, R]) Submit(task *submittedTask[T, R]) error {
 // It follows the work-stealing algorithm: local work -> global work -> steal -> backoff
 func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], pool *WorkerPool[T, R]) {
 	localQueue := s.workerQueues[workerID]
-	missCount := 0
+	var missCount, globalCounter int
 
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.quit:
-			s.drain(ctx, localQueue, executor, pool)
-			return
-		default:
+		if globalCounter%10 == 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.quit:
+				s.drain(ctx, localQueue, executor, pool)
+				return
+			default:
+			}
+		}
+		globalCounter++
+
+		for range fastCheckCounter {
+			if t := localQueue.PopBack(); t != nil {
+				executeSubmitted(ctx, t, pool, executor)
+				missCount = 0
+			}
 		}
 
-		t := localQueue.PopBack()
-		if t == nil {
-			t = s.globalQueue.PopFront()
+		if t := s.globalQueue.PopFront(); t != nil {
+			executeSubmitted(ctx, t, pool, executor)
+			missCount = 0
+			continue
 		}
 
-		if t == nil {
-			t = s.steal(int(workerID))
-		}
-
-		if t != nil {
+		if t := s.steal(int(workerID)); t != nil {
 			executeSubmitted(ctx, t, pool, executor)
 			missCount = 0
 			continue
@@ -218,8 +231,9 @@ func (s *workSteal[T, R]) steal(thiefID int) *submittedTask[T, R] {
 		return nil
 	}
 
+	maxAttempts := min(n-1, maxStealAttempts)
 	startIndex := int(s.stealSeed.Add(1) % uint64(n))
-	for i := range n {
+	for i := range maxAttempts {
 		victimID := (startIndex + i) % n
 		if victimID == thiefID {
 			continue
