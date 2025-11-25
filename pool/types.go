@@ -205,3 +205,17 @@ type submittedTask[T any, R any] struct {
 	id     int64
 	future *Future[R, int64]
 }
+
+// SchedulingStrategy defines the behavior for distributing tasks to workers.
+// Any new algorithm (Work Stealing, Priority Queue, Ring Buffer) must implement this.
+type SchedulingStrategy[T any, R any] interface {
+	// Submit accepts a task into the scheduling system.
+	// It handles the logic of where the task goes (Global Queue vs Local Queue).
+	Submit(task *submittedTask[T, R]) error
+
+	// Shutdown gracefully stops the workers and waits for them to finish.
+	Shutdown()
+
+	// Worker executes tasks assigned to a specific worker, using the provided executor and pool.
+	Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], pool *WorkerPool[T, R])
+}

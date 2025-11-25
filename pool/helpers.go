@@ -94,6 +94,11 @@ func checkfuncs[T any, R any](
 // waitUntil blocks until either the done channel is closed or the timeout is reached.
 // It is used during graceful shutdown to wait for workers to complete their tasks.
 func waitUntil(d <-chan struct{}, timeout time.Duration) error {
+	if timeout <= 0 {
+		<-d
+		return nil
+	}
+
 	select {
 	case <-d:
 		return nil
