@@ -18,7 +18,7 @@ const (
 	// Default initial capacity for unbounded queue (large enough for most use cases)
 	defaultInitialCapacity = 65536
 	// Maximum spin attempts before yielding
-	maxSpinAttempts = 100
+	maxSpinAttempts = 10
 )
 
 // mpmcQueueSlot represents a single slot in the ring buffer
@@ -47,6 +47,12 @@ type mpmcQueue[T any] struct {
 	// Closed flag
 	closed atomic.Bool
 
+	// Notification channel for data (BUFFERED, NEVER CLOSED)
+	notifyC chan struct{}
+
+	// Notification channel for shutdown (UNBUFFERED, CLOSED ON SHUTDOWN)
+	closeC chan struct{}
+
 	// Configuration
 	bounded  bool
 	capacity int
@@ -74,6 +80,8 @@ func newMPMCQueue[T any](capacity int, bounded bool) *mpmcQueue[T] {
 		mask:     uint64(capacity - 1),
 		bounded:  bounded,
 		capacity: capacity,
+		notifyC:  make(chan struct{}, 1),
+		closeC:   make(chan struct{}),
 	}
 }
 
@@ -99,6 +107,10 @@ func (q *mpmcQueue[T]) Enqueue(quit <-chan struct{}, value T) error {
 			if atomic.CompareAndSwapUint64(&q.tail, tail, tail+1) {
 				slot.value = value
 				atomic.StoreUint64(&slot.sequence, tail+1)
+				select {
+				case q.notifyC <- struct{}{}:
+				default:
+				}
 				return nil
 			}
 			continue
@@ -128,12 +140,6 @@ func (q *mpmcQueue[T]) Dequeue(ctx context.Context) (T, error) {
 			return zero, ErrQueueClosed
 		}
 
-		select {
-		case <-ctx.Done():
-			return zero, ctx.Err()
-		default:
-		}
-
 		head, _, slot, diff := q.load(true)
 		if diff == 0 {
 			if val, ok := q.deque(head, slot); ok {
@@ -143,8 +149,17 @@ func (q *mpmcQueue[T]) Dequeue(ctx context.Context) (T, error) {
 		}
 
 		spinCount++
-		if spinCount > maxSpinAttempts {
+		if spinCount < maxSpinAttempts {
 			runtime.Gosched()
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			return zero, ctx.Err()
+		case <-q.closeC:
+			return zero, ErrQueueClosed
+		case <-q.notifyC:
 			spinCount = 0
 		}
 	}
@@ -241,7 +256,9 @@ func (q *mpmcQueue[T]) IsBounded() bool {
 // Close marks the queue as closed
 // No new items can be enqueued after close
 func (q *mpmcQueue[T]) Close() {
-	q.closed.Store(true)
+	if q.closed.CompareAndSwap(false, true) {
+		close(q.closeC)
+	}
 }
 
 // IsClosed returns whether the queue is closed
@@ -273,30 +290,33 @@ func (s *mpmc[T, R]) Submit(task *submittedTask[T, R]) error {
 
 // worker is the main worker loop that dequeues and executes tasks
 func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], pool *WorkerPool[T, R]) {
-	for {
+	quitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
 		select {
 		case <-s.quit:
-			s.drainQueue(ctx, executor, pool)
-			return
+			cancel()
 		case <-ctx.Done():
-			s.drainQueue(ctx, executor, pool)
-			return
-		default:
-			task, err := s.queue.Dequeue(ctx)
-			if err != nil {
-				if err == ErrQueueClosed {
-					s.drainQueue(ctx, executor, pool)
-					return
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				runtime.Gosched()
-				continue
-			}
-
-			executeSubmitted(ctx, task, pool, executor)
+			cancel()
 		}
+	}()
+
+	for {
+		task, err := s.queue.Dequeue(quitCtx)
+		if err != nil {
+			if err == ErrQueueClosed || err == context.Canceled {
+				s.drainQueue(ctx, executor, pool)
+				return
+			}
+			if ctx.Err() != nil {
+				s.drainQueue(ctx, executor, pool)
+				return
+			}
+			continue
+		}
+
+		executeSubmitted(ctx, task, pool, executor)
 	}
 }
 

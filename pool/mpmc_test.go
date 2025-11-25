@@ -17,14 +17,14 @@ func TestMPMCQueue_BasicEnqueueDequeue(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue some items
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := queue.Enqueue(ctx.Done(), i); err != nil {
 			t.Fatalf("failed to enqueue %d: %v", i, err)
 		}
 	}
 
 	// Dequeue and verify
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		val, err := queue.Dequeue(ctx)
 		if err != nil {
 			t.Fatalf("failed to dequeue: %v", err)
@@ -41,7 +41,7 @@ func TestMPMCQueue_BoundedQueueFull(t *testing.T) {
 	ctx := context.Background()
 
 	// Fill the queue
-	for i := 0; i < capacity; i++ {
+	for i := range capacity {
 		if err := queue.Enqueue(ctx.Done(), i); err != nil {
 			t.Fatalf("failed to enqueue %d: %v", i, err)
 		}
@@ -64,7 +64,7 @@ func TestMPMCQueue_UnboundedBlocking(t *testing.T) {
 	ctx := context.Background()
 
 	// Fill the queue
-	for i := 0; i < capacity; i++ {
+	for i := range capacity {
 		if err := queue.Enqueue(ctx.Done(), i); err != nil {
 			t.Fatalf("failed to enqueue %d: %v", i, err)
 		}
@@ -139,7 +139,7 @@ func TestMPMCQueue_ConcurrentDequeue(t *testing.T) {
 
 	// Enqueue items
 	itemCount := 1000
-	for i := 0; i < itemCount; i++ {
+	for i := range itemCount {
 		if err := queue.Enqueue(ctx.Done(), i); err != nil {
 			t.Fatalf("failed to enqueue: %v", err)
 		}
@@ -159,7 +159,7 @@ func TestMPMCQueue_ConcurrentDequeue(t *testing.T) {
 
 	// Multiple consumers
 	wg.Add(consumerCount)
-	for c := 0; c < consumerCount; c++ {
+	for c := range consumerCount {
 		go func(consumerID int) {
 			defer wg.Done()
 			for {
@@ -171,7 +171,6 @@ func TestMPMCQueue_ConcurrentDequeue(t *testing.T) {
 					continue
 				}
 
-				// Track received items
 				mu.Lock()
 				if received[val] {
 					t.Errorf("consumer %d: duplicate value received: %d", consumerID, val)
@@ -217,10 +216,10 @@ func TestMPMCQueue_ConcurrentProducerConsumer(t *testing.T) {
 
 	// Start producers
 	producerWg.Add(producerCount)
-	for p := 0; p < producerCount; p++ {
+	for p := range producerCount {
 		go func(producerID int) {
 			defer producerWg.Done()
-			for i := 0; i < itemsPerProducer; i++ {
+			for i := range itemsPerProducer {
 				val := producerID*itemsPerProducer + i
 				if err := queue.Enqueue(ctx.Done(), val); err != nil {
 					t.Errorf("producer %d: failed to enqueue: %v", producerID, err)
@@ -233,7 +232,7 @@ func TestMPMCQueue_ConcurrentProducerConsumer(t *testing.T) {
 
 	// Start consumers
 	consumerWg.Add(consumerCount)
-	for c := 0; c < consumerCount; c++ {
+	for c := range consumerCount {
 		go func(consumerID int) {
 			defer consumerWg.Done()
 			for int(consumedCount.Load()) < producerCount*itemsPerProducer {
