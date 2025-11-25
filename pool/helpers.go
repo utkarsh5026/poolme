@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sync"
 	"time"
 )
 
@@ -113,13 +112,4 @@ func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], poo
 		Error: err,
 		Key:   s.id,
 	}
-}
-
-func informDone(wg *sync.WaitGroup) <-chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	return done
 }
