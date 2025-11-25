@@ -205,7 +205,7 @@ func TestPriorityQueueStrategy_ContextCancellation(t *testing.T) {
 
 	// Try to submit with cancelled context
 	task := PriorityTask{ID: 99, Priority: 1, Value: "late-task"}
-	_, err = pool.Submit(task)
+	_, _ = pool.Submit(task)
 	// Note: Submit doesn't currently check pool state, only context in the select
 	// This test verifies the submit context handling works
 
@@ -272,7 +272,7 @@ func TestPriorityQueueStrategy_HighPriorityFirst(t *testing.T) {
 	// are queued, higher priority tasks execute first
 	pool := NewWorkerPool[int, string](
 		WithWorkerCount(1), // Single worker ensures serialized execution
-		WithTaskBuffer(20),  // Large buffer to queue all tasks
+		WithTaskBuffer(20), // Large buffer to queue all tasks
 		WithPriorityQueue(func(task int) int {
 			return task // Lower number = higher priority
 		}),

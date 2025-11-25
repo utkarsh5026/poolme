@@ -10,8 +10,10 @@ import (
 
 const (
 	fastCheckCounter          = 3
-	defaultLocalQueueCapacity = 16
-	maxStealAttempts          = 4
+	defaultLocalQueueCapacity = 256 // Increased for better local throughput
+	maxStealAttempts          = 8   // Increased to check more victims
+	localQueueThreshold       = 128 // Push to global when local exceeds this
+	batchStealSize            = 4   // Steal multiple tasks at once
 )
 
 // wsDeque implements a lock-free work-stealing deque (double-ended queue) optimized for
@@ -238,16 +240,25 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, workers int) *workS
 	return w
 }
 
-// Submit adds tasks directly to the global queue for optimal load balancing.
-// Workers will pull from the global queue when their local queue is empty,
-// allowing natural load distribution based on worker availability.
+// Submit uses a hybrid approach for optimal performance:
+// 1. Try to add to a worker's local queue (round-robin for cache locality)
+// 2. If local queue is above threshold, add to global queue (load balancing)
+// 3. This gives both cache locality AND prevents queue buildup
 func (s *workSteal[T, R]) Submit(task *submittedTask[T, R]) error {
-	s.globalQueue.PushBack(task)
+	workerID := int(s.nextWorker.Add(1) % uint64(s.workerCount))
+	local := s.workerQueues[workerID]
+
+	if local.Len() < localQueueThreshold {
+		local.PushBack(task)
+	} else {
+		s.globalQueue.PushBack(task)
+	}
+
 	return nil
 }
 
 // worker is the main loop for each worker goroutine.
-// It follows the work-stealing algorithm: local work -> global work -> steal -> backoff
+// It follows the work-stealing algorithm: local work -> global batch -> steal -> backoff
 func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], pool *WorkerPool[T, R]) {
 	localQueue := s.workerQueues[workerID]
 	var missCount, globalCounter int
@@ -272,10 +283,19 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 			}
 		}
 
-		if t := s.globalQueue.PopFront(); t != nil {
-			executeSubmitted(ctx, t, pool, executor)
-			missCount = 0
-			continue
+		if s.globalQueue.Len() > 0 {
+			if t := s.globalQueue.PopFront(); t != nil {
+				executeSubmitted(ctx, t, pool, executor)
+				missCount = 0
+
+				batchCount := min(s.globalQueue.Len(), batchStealSize-1)
+				for range batchCount {
+					if task := s.globalQueue.PopFront(); task != nil {
+						localQueue.PushBack(task)
+					}
+				}
+				continue
+			}
 		}
 
 		if t := s.steal(int(workerID)); t != nil {
@@ -289,7 +309,8 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 	}
 }
 
-// steal attempts to steal work from other workers' queues.
+// steal attempts to steal work from other workers' queues using batch stealing.
+// Batch stealing reduces overhead by taking multiple tasks at once.
 // Uses randomized victim selection to reduce contention.
 // Steals from the front (FIFO) to minimize contention with the victim
 // who is popping from the back (LIFO).
@@ -301,45 +322,76 @@ func (s *workSteal[T, R]) steal(thiefID int) *submittedTask[T, R] {
 
 	maxAttempts := min(n-1, maxStealAttempts)
 	startIndex := int(s.stealSeed.Add(1) % uint64(n))
+	thiefQueue := s.workerQueues[thiefID]
+
 	for i := range maxAttempts {
 		victimID := (startIndex + i) % n
 		if victimID == thiefID {
 			continue
 		}
 
-		if task := s.workerQueues[victimID].PopFront(); task != nil {
-			return task
+		victimQueue := s.workerQueues[victimID]
+
+		// Batch steal: take multiple tasks at once to reduce overhead
+		// Only do this if victim has enough tasks (don't steal from small queues)
+		victimLen := victimQueue.Len()
+		if victimLen > batchStealSize*2 {
+			stealCount := min(victimLen/2, batchStealSize)
+
+			// Steal first task to return, rest go to local queue
+			firstTask := victimQueue.PopFront()
+			if firstTask == nil {
+				continue
+			}
+
+			// Steal additional tasks to local queue
+			for j := 1; j < stealCount; j++ {
+				if task := victimQueue.PopFront(); task != nil {
+					thiefQueue.PushBack(task)
+				}
+			}
+
+			return firstTask
+		} else if victimLen > 0 {
+			if task := victimQueue.PopFront(); task != nil {
+				return task
+			}
 		}
 	}
 
 	return nil
 }
 
-// backoff implements an exponential backoff strategy for idle workers.
-// This prevents busy-waiting and reduces CPU usage when there's no work.
+// backoff implements an adaptive exponential backoff strategy for idle workers.
+// This prevents busy-waiting while maintaining responsiveness.
 //
-// Backoff progression:
-//   - missCount 1-10: No backoff (spin a bit first)
-//   - missCount 11-20: Short yield (let other goroutines run)
-//   - missCount 21+: Exponential sleep up to 10ms max
+// Backoff progression (optimized for responsiveness):
+//   - missCount 1-20: Active spinning (check frequently for new work)
+//   - missCount 21-30: Yield to scheduler (let other goroutines run)
+//   - missCount 31+: Exponential sleep (conserve CPU when truly idle)
 func (s *workSteal[T, R]) backoff(missCount int) {
 	switch {
-	case missCount <= 10:
+	case missCount <= 20:
+		// Active spinning - keep checking aggressively
+		// This helps with bursty workloads where new tasks arrive quickly
 		return
 
-	case missCount <= 20:
+	case missCount <= 30:
 		// Yield: give other goroutines a chance to run
 		// runtime.Gosched() tells the scheduler to pause this goroutine
 		// and run other goroutines before resuming
 		runtime.Gosched()
 
 	default:
-		sleepTime := 100 * time.Microsecond
-		for i := 20; i < missCount && sleepTime < 10*time.Millisecond; i++ {
+		// Exponential backoff for truly idle workers
+		// Start with 50µs and double up to 5ms max (more responsive than before)
+		sleepTime := 50 * time.Microsecond
+		iterations := missCount - 30
+		for i := 0; i < iterations && sleepTime < 5*time.Millisecond; i++ {
 			sleepTime *= 2
 		}
-		if sleepTime > 10*time.Millisecond {
-			sleepTime = 10 * time.Millisecond
+		if sleepTime > 5*time.Millisecond {
+			sleepTime = 5 * time.Millisecond
 		}
 		time.Sleep(sleepTime)
 	}
