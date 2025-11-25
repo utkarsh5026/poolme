@@ -165,8 +165,8 @@ func TestWorkerPool_Shutdown(t *testing.T) {
 
 		// Shutdown with zero timeout (wait indefinitely)
 		err = pool.Shutdown(0)
-		if !errors.Is(err, ErrShutdownTimeout) {
-			t.Errorf("shutdown with zero timeout failed: %v", err)
+		if err != nil {
+			t.Errorf("shutdown with zero timeout should succeed: %v", err)
 		}
 	})
 }
@@ -255,7 +255,7 @@ func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
 			t.Error("expected timeout error")
 		}
 		if !errors.Is(err, ErrShutdownTimeout) {
-			t.Errorf("expected 'shutdown timeout exceeded', got %v", err)
+			t.Errorf("expected ErrShutdownTimeout, got %v", err)
 		}
 
 		// Should timeout around 100ms, not wait for full 2s
