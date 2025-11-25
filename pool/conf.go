@@ -33,6 +33,36 @@ const (
 	BackoffDecorrelated = algorithms.BackoffDecorrelated
 )
 
+// SchedulingStrategyType defines the task scheduling algorithm to use.
+type SchedulingStrategyType int
+
+const (
+	// SchedulingChannel uses a simple channel-based strategy (default).
+	// All workers pull from a single shared channel. Simple and efficient for most use cases.
+	// Best for: General purpose workloads with uniform task complexity.
+	SchedulingChannel SchedulingStrategyType = iota
+
+	// SchedulingWorkStealing uses a work-stealing algorithm with per-worker queues.
+	// Each worker has its own local queue and steals from others when idle.
+	// Provides better cache locality and automatic load balancing.
+	// Best for: CPU-intensive tasks, recursive workloads, and scenarios with variable task complexity.
+	// Based on algorithms used in Go's runtime, Java's ForkJoinPool, and .NET's TPL.
+	SchedulingWorkStealing
+
+	// SchedulingPriorityQueue uses a priority queue with task prioritization.
+	// Tasks are processed based on their priority value.
+	// Best for: Workloads where certain tasks must be processed before others.
+	// Requires WithPriorityQueue to be set with a priority function.
+	SchedulingPriorityQueue
+
+	// SchedulingMPMC uses a lock-free multi-producer multi-consumer queue.
+	// Multiple producers can submit tasks concurrently with minimal contention.
+	// Multiple consumers (workers) can dequeue tasks concurrently.
+	// Best for: High-throughput scenarios with many concurrent submitters.
+	// Can be configured as bounded (fixed capacity) or unbounded (dynamic growth).
+	SchedulingMPMC
+)
+
 type workerPoolConfig struct {
 	workerCount     int
 	taskBuffer      int
@@ -47,8 +77,14 @@ type workerPoolConfig struct {
 	backoffJitterFactor float64
 	retryPolicySet      bool // Track if WithRetryPolicy was explicitly called
 
+	schedulingStrategy SchedulingStrategyType
+
 	usePq  bool
 	pqFunc func(a any) int
+
+	// MPMC queue configuration
+	mpmcBounded  bool
+	mpmcCapacity int
 
 	// Hook functions stored as any for flexibility
 	beforeTaskStart     func(any)
@@ -290,12 +326,134 @@ func WithDecorrelatedJitter(initialDelay, maxDelay time.Duration) WorkerPoolOpti
 func WithPriorityQueue[T any](checkPrior func(a T) int) WorkerPoolOption {
 	return func(cfg *workerPoolConfig) {
 		cfg.usePq = true
+		cfg.schedulingStrategy = SchedulingPriorityQueue
 		cfg.pqFunc = func(a any) int {
 			if t, ok := a.(T); ok {
 				return checkPrior(t)
 			}
 			return 0
 		}
+	}
+}
+
+// WithSchedulingStrategy sets the task scheduling algorithm to use.
+// This determines how tasks are distributed to and processed by workers.
+//
+// Available strategies:
+//   - SchedulingChannel: Simple shared channel (default) - best for general use
+//   - SchedulingWorkStealing: Per-worker queues with work stealing - best for CPU-intensive tasks
+//   - SchedulingPriorityQueue: Priority-based processing - requires WithPriorityQueue
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithSchedulingStrategy(SchedulingWorkStealing),
+//	)
+func WithSchedulingStrategy(strategy SchedulingStrategyType) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.schedulingStrategy = strategy
+	}
+}
+
+// WithWorkStealing is a convenience option to enable work-stealing scheduling.
+// This is equivalent to WithSchedulingStrategy(SchedulingWorkStealing).
+//
+// Work-stealing provides:
+//   - Better cache locality (LIFO local queue processing)
+//   - Automatic load balancing (idle workers steal from busy workers)
+//   - Reduced lock contention (workers primarily use their own queues)
+//   - Better scalability for CPU-intensive workloads
+//
+// Best for:
+//   - CPU-bound tasks with variable complexity
+//   - Recursive or divide-and-conquer algorithms
+//   - Workloads where some tasks spawn additional tasks
+//   - High-throughput scenarios with many concurrent tasks
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithWorkerCount(8),
+//	    WithWorkStealing(),
+//	)
+func WithWorkStealing() WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.schedulingStrategy = SchedulingWorkStealing
+	}
+}
+
+// WithMPMCQueue is a convenience option to enable MPMC queue scheduling.
+// This is equivalent to WithSchedulingStrategy(SchedulingMPMC).
+// By default, creates an unbounded queue that grows dynamically.
+//
+// MPMC (Multi-Producer Multi-Consumer) queue provides:
+//   - Lock-free concurrent enqueue/dequeue operations
+//   - Minimal contention with many concurrent submitters
+//   - Better scalability for high-throughput scenarios
+//   - Efficient ring buffer implementation
+//
+// Best for:
+//   - High-throughput scenarios with many concurrent task submitters
+//   - Workloads where multiple goroutines submit tasks simultaneously
+//   - Scenarios requiring predictable low-latency task submission
+//   - Applications with bursty task submission patterns
+//
+// Example (unbounded):
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithWorkerCount(8),
+//	    WithMPMCQueue(),
+//	)
+//
+// Example (bounded with capacity):
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithWorkerCount(8),
+//	    WithMPMCQueue(WithBoundedQueue(1000)),
+//	)
+func WithMPMCQueue(opts ...MPMCOption) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.schedulingStrategy = SchedulingMPMC
+
+		// Apply MPMC-specific options
+		for _, opt := range opts {
+			opt(cfg)
+		}
+	}
+}
+
+// MPMCOption is a function that configures MPMC-specific settings
+type MPMCOption func(*workerPoolConfig)
+
+// WithBoundedQueue configures the MPMC queue as bounded with a fixed capacity.
+// When the queue is full, Submit operations will return an error (ErrQueueFull).
+// This is useful for applying backpressure and preventing unbounded memory growth.
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithMPMCQueue(WithBoundedQueue(1000)),
+//	)
+func WithBoundedQueue(capacity int) MPMCOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.mpmcBounded = true
+		cfg.mpmcCapacity = capacity
+	}
+}
+
+// WithUnboundedQueue explicitly configures the MPMC queue as unbounded.
+// This is the default behavior, but can be used for clarity.
+// The queue will grow dynamically as needed.
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithMPMCQueue(WithUnboundedQueue()),
+//	)
+func WithUnboundedQueue() MPMCOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.mpmcBounded = false
+		cfg.mpmcCapacity = 0 // Use default initial capacity
 	}
 }
 
