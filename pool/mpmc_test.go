@@ -13,7 +13,7 @@ import (
 // Tests for MPMCQueue
 
 func TestMPMCQueue_BasicEnqueueDequeue(t *testing.T) {
-	queue := NewMPMCQueue[int](10, false)
+	queue := newMPMCQueue[int](10, false)
 	ctx := context.Background()
 
 	// Enqueue some items
@@ -37,7 +37,7 @@ func TestMPMCQueue_BasicEnqueueDequeue(t *testing.T) {
 
 func TestMPMCQueue_BoundedQueueFull(t *testing.T) {
 	capacity := 4
-	queue := NewMPMCQueue[int](capacity, true)
+	queue := newMPMCQueue[int](capacity, true)
 	ctx := context.Background()
 
 	// Fill the queue
@@ -60,7 +60,7 @@ func TestMPMCQueue_BoundedQueueFull(t *testing.T) {
 func TestMPMCQueue_UnboundedBlocking(t *testing.T) {
 	// Test that unbounded queues block when full rather than returning error
 	capacity := 8
-	queue := NewMPMCQueue[int](capacity, false)
+	queue := newMPMCQueue[int](capacity, false)
 	ctx := context.Background()
 
 	// Fill the queue
@@ -99,7 +99,7 @@ func TestMPMCQueue_UnboundedBlocking(t *testing.T) {
 }
 
 func TestMPMCQueue_ConcurrentEnqueue(t *testing.T) {
-	queue := NewMPMCQueue[int](1024, false)
+	queue := newMPMCQueue[int](1024, false)
 	ctx := context.Background()
 
 	producerCount := 10
@@ -134,7 +134,7 @@ func TestMPMCQueue_ConcurrentEnqueue(t *testing.T) {
 }
 
 func TestMPMCQueue_ConcurrentDequeue(t *testing.T) {
-	queue := NewMPMCQueue[int](1024, false)
+	queue := newMPMCQueue[int](1024, false)
 	ctx := context.Background()
 
 	// Enqueue items
@@ -204,7 +204,7 @@ func TestMPMCQueue_ConcurrentDequeue(t *testing.T) {
 }
 
 func TestMPMCQueue_ConcurrentProducerConsumer(t *testing.T) {
-	queue := NewMPMCQueue[int](128, false)
+	queue := newMPMCQueue[int](128, false)
 	ctx := context.Background()
 
 	producerCount := 5
@@ -287,7 +287,7 @@ func TestMPMCQueue_ConcurrentProducerConsumer(t *testing.T) {
 }
 
 func TestMPMCQueue_Close(t *testing.T) {
-	queue := NewMPMCQueue[int](10, false)
+	queue := newMPMCQueue[int](10, false)
 	ctx := context.Background()
 
 	// Enqueue some items
@@ -325,7 +325,7 @@ func TestMPMCQueue_Close(t *testing.T) {
 }
 
 func TestMPMCQueue_TryDequeue(t *testing.T) {
-	queue := NewMPMCQueue[int](10, false)
+	queue := newMPMCQueue[int](10, false)
 	ctx := context.Background()
 
 	// Try dequeue from empty queue
@@ -585,7 +585,7 @@ func TestWorkerPool_MPMC_ErrorHandling(t *testing.T) {
 // Benchmark tests
 
 func BenchmarkMPMCQueue_Enqueue(b *testing.B) {
-	queue := NewMPMCQueue[int](1024, false)
+	queue := newMPMCQueue[int](1024, false)
 	ctx := context.Background()
 
 	b.ResetTimer()
@@ -595,7 +595,7 @@ func BenchmarkMPMCQueue_Enqueue(b *testing.B) {
 }
 
 func BenchmarkMPMCQueue_Dequeue(b *testing.B) {
-	queue := NewMPMCQueue[int](b.N, false)
+	queue := newMPMCQueue[int](b.N, false)
 	ctx := context.Background()
 
 	// Pre-fill the queue
@@ -610,7 +610,7 @@ func BenchmarkMPMCQueue_Dequeue(b *testing.B) {
 }
 
 func BenchmarkMPMCQueue_ConcurrentEnqueueDequeue(b *testing.B) {
-	queue := NewMPMCQueue[int](1024, false)
+	queue := newMPMCQueue[int](1024, false)
 	ctx := context.Background()
 
 	b.RunParallel(func(pb *testing.PB) {

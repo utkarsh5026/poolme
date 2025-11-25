@@ -118,3 +118,20 @@ func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], poo
 		Key:   s.id,
 	}
 }
+
+// nextPowerOfTwo returns the next power of 2 >= n
+func nextPowerOfTwo(n int) int {
+	if n <= 0 {
+		return 1
+	}
+
+	if n&(n-1) == 0 {
+		return n
+	}
+
+	power := 1
+	for power < n {
+		power *= 2
+	}
+	return power
+}
