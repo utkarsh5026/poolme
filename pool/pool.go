@@ -16,14 +16,12 @@ import (
 // poolState holds the runtime state for a long-running worker pool.
 // It manages worker goroutines, task/result channels, and lifecycle.
 type poolState[T any, R any] struct {
-	// taskChan      chan *submittedTask[T, R]
-	ctx context.Context
-	// cancel        context.CancelFunc
-	// wg            sync.WaitGroup
+	cancel        context.CancelFunc
 	started       atomic.Bool
 	shutdown      atomic.Bool
 	taskIDCounter atomic.Int64
 	strategy      SchedulingStrategy[T, R]
+	done          chan struct{} // Closed when all workers have finished
 }
 
 // WorkerPool is a generic, production-ready worker pool implementation.
@@ -38,12 +36,13 @@ type poolState[T any, R any] struct {
 //   - T: The input task type
 //   - R: The result type
 type WorkerPool[T any, R any] struct {
-	workerCount     int
-	taskBuffer      int
-	maxAttempts     int
-	initialDelay    time.Duration
-	rateLimiter     *rate.Limiter
-	continueOnError bool
+	workerCount        int
+	taskBuffer         int
+	maxAttempts        int
+	initialDelay       time.Duration
+	rateLimiter        *rate.Limiter
+	continueOnError    bool
+	schedulingStrategy SchedulingStrategyType
 
 	beforeTaskStart func(T)
 	onTaskEnd       func(T, R, error)
@@ -53,6 +52,10 @@ type WorkerPool[T any, R any] struct {
 
 	usePq  bool
 	pqFunc func(a any) int
+
+	// MPMC queue configuration
+	mpmcBounded  bool
+	mpmcCapacity int
 
 	mu    sync.RWMutex
 	state *poolState[T, R]
@@ -118,18 +121,52 @@ func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 	beforeTaskStart, onTaskEnd, onRetry := checkfuncs[T, R](cfg, expectedTaskType, expectedResultType)
 
 	return &WorkerPool[T, R]{
-		workerCount:     cfg.workerCount,
-		taskBuffer:      cfg.taskBuffer,
-		maxAttempts:     cfg.maxAttempts,
-		initialDelay:    cfg.initialDelay,
-		rateLimiter:     cfg.rateLimiter,
-		beforeTaskStart: beforeTaskStart,
-		onTaskEnd:       onTaskEnd,
-		onRetry:         onRetry,
-		continueOnError: cfg.continueOnError,
-		backoffStrategy: backoffStrategy,
-		usePq:           cfg.usePq,
-		pqFunc:          cfg.pqFunc,
+		workerCount:        cfg.workerCount,
+		taskBuffer:         cfg.taskBuffer,
+		maxAttempts:        cfg.maxAttempts,
+		initialDelay:       cfg.initialDelay,
+		rateLimiter:        cfg.rateLimiter,
+		beforeTaskStart:    beforeTaskStart,
+		onTaskEnd:          onTaskEnd,
+		onRetry:            onRetry,
+		continueOnError:    cfg.continueOnError,
+		backoffStrategy:    backoffStrategy,
+		schedulingStrategy: cfg.schedulingStrategy,
+		usePq:              cfg.usePq,
+		pqFunc:             cfg.pqFunc,
+		mpmcBounded:        cfg.mpmcBounded,
+		mpmcCapacity:       cfg.mpmcCapacity,
+	}
+}
+
+// createSchedulingStrategy creates the appropriate scheduling strategy based on configuration.
+func (wp *WorkerPool[T, R]) createSchedulingStrategy() (SchedulingStrategy[T, R], error) {
+	strategyType := wp.schedulingStrategy
+
+	if wp.usePq {
+		strategyType = SchedulingPriorityQueue
+	}
+
+	switch strategyType {
+	case SchedulingWorkStealing:
+		return newWorkStealingStrategy[T, R](256, wp.workerCount), nil
+
+	case SchedulingPriorityQueue:
+		if wp.pqFunc == nil {
+			return nil, errors.New("priority queue enabled but no priority function provided")
+		}
+		priorityFunc := func(task T) int {
+			return wp.pqFunc(task)
+		}
+		return newPriorityQueueStrategy[T, R](wp.taskBuffer, priorityFunc), nil
+
+	case SchedulingMPMC:
+		return newMPMCStrategy[T, R](wp.mpmcBounded, wp.mpmcCapacity), nil
+
+	case SchedulingChannel:
+		fallthrough
+	default:
+		return newChannelStrategy[T, R](wp.taskBuffer), nil
 	}
 }
 
@@ -308,28 +345,37 @@ func (wp *WorkerPool[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, 
 		return errors.New("pool already started")
 	}
 
-	var strategy SchedulingStrategy[T, R]
-	if wp.usePq {
-		if wp.pqFunc == nil {
-			return errors.New("priority queue enabled but no priority function provided")
-		}
-		priorityFunc := func(task T) int {
-			return wp.pqFunc(task)
-		}
-		strategy = newPriorityQueueStrategy(wp, processFn, priorityFunc)
-	} else {
-		strategy = NewChannelStrategy(wp, processFn)
+	strategy, err := wp.createSchedulingStrategy()
+	if err != nil {
+		return err
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
 	state := &poolState[T, R]{
-		ctx:      ctx,
 		strategy: strategy,
+		cancel:   cancel,
+		done:     make(chan struct{}),
 	}
 
 	wp.state = state
 	state.started.Store(true)
 
-	return state.strategy.Start(ctx, wp.workerCount)
+	var wg sync.WaitGroup
+	wg.Add(wp.workerCount)
+	for i := range wp.workerCount {
+		go func(workerID int64) {
+			defer wg.Done()
+			strategy.Worker(ctx, workerID, processFn, wp)
+		}(int64(i))
+	}
+
+	// Close done channel when all workers finish
+	go func() {
+		wg.Wait()
+		close(state.done)
+	}()
+
+	return nil
 }
 
 // Submit submits a single task to the pool for asynchronous processing.
@@ -397,27 +443,12 @@ func (wp *WorkerPool[T, R]) Submit(task T) (*Future[R, int64], error) {
 		future: future,
 	}
 
-	err := state.strategy.Submit(state.ctx, st)
+	err := state.strategy.Submit(st)
 	return future, err
 }
 
 // Shutdown gracefully shuts down the worker pool started with Start.
 // It waits for all in-flight tasks to complete before returning, ensuring no work is lost.
-//
-// The shutdown process:
-//  1. Marks the pool as shutdown (prevents new task submissions)
-//  2. Closes the task channel (signals workers no more tasks will arrive)
-//  3. Waits for all workers to finish processing current tasks
-//  4. Cancels the pool context
-//
-// Behavior:
-//   - All tasks already submitted will be processed to completion
-//   - New Submit calls after Shutdown will return an error
-//   - If timeout is 0, waits indefinitely for all tasks to complete
-//   - If timeout > 0, waits up to that duration before forcefully cancelling
-//   - Forceful cancellation (via timeout) will interrupt in-flight tasks
-//   - Safe to call multiple times (subsequent calls return error)
-//   - Returns error if pool was never started
 //
 // Parameters:
 //   - timeout: Maximum duration to wait for graceful shutdown (0 = wait forever)
@@ -451,5 +482,11 @@ func (wp *WorkerPool[T, R]) Shutdown(timeout time.Duration) error {
 		return errors.New("pool already shut down")
 	}
 	wp.mu.Unlock()
-	return waitUntil(state.strategy.Shutdown(), timeout)
+
+	// Signal shutdown to the strategy (closes task channels/queues)
+	// Workers will drain their queues and exit gracefully
+	state.strategy.Shutdown()
+
+	// Wait for all workers to finish draining and exit
+	return waitUntil(state.done, timeout)
 }
