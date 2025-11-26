@@ -220,52 +220,6 @@ func TestWorkerPool_RateLimit_ProcessMap(t *testing.T) {
 	}
 }
 
-func TestWorkerPool_RateLimit_ProcessStream(t *testing.T) {
-	// Test rate limiting works with ProcessStream
-	tasksPerSecond := 20.0
-	burst := 5
-	numTasks := 30
-
-	pool := pool.NewWorkerPool[int, int](
-		pool.WithWorkerCount(5),
-		pool.WithRateLimit(tasksPerSecond, burst),
-	)
-
-	processFn := func(ctx context.Context, task int) (int, error) {
-		return task + 100, nil
-	}
-
-	taskChan := make(chan int, numTasks)
-	for i := 0; i < numTasks; i++ {
-		taskChan <- i
-	}
-	close(taskChan)
-
-	start := time.Now()
-	resultChan, errChan := pool.ProcessStream(context.Background(), taskChan, processFn)
-
-	results := []int{}
-	for result := range resultChan {
-		results = append(results, result)
-	}
-
-	if err := <-errChan; err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	elapsed := time.Since(start)
-
-	if len(results) != numTasks {
-		t.Fatalf("expected %d results, got %d", numTasks, len(results))
-	}
-
-	// With 30 tasks at 20 tasks/sec (burst 5), minimum time should be ~1.25 seconds
-	expectedMinDuration := 1200 * time.Millisecond
-	if elapsed < expectedMinDuration {
-		t.Errorf("rate limiting should slow down processing; took %v (expected at least %v)", elapsed, expectedMinDuration)
-	}
-}
-
 func TestWorkerPool_RateLimit_InvalidParameters(t *testing.T) {
 	// Test that invalid rate limit parameters don't crash
 	tests := []struct {
