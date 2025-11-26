@@ -147,12 +147,12 @@ func createSchedulingStrategy[T, R any](conf *processorConfig[T, R], tasks []*su
 		return newPriorityQueueStrategy[T, R](conf, tasks), nil
 
 	case SchedulingMPMC:
-		return newMPMCStrategy[T, R](conf.mpmcBounded, conf.mpmcCapacity), nil
+		return newMPMCStrategy(conf, conf.mpmcBounded, conf.mpmcCapacity), nil
 
 	case SchedulingChannel:
 		fallthrough
 	default:
-		return newChannelStrategy[T, R](conf), nil
+		return newChannelStrategy(conf), nil
 	}
 }
 
@@ -221,4 +221,3 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *processorConfig[T, R] {
 		mpmcCapacity: cfg.mpmcCapacity,
 	}
 }
-

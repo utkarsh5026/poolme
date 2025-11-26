@@ -57,9 +57,10 @@ type mpmc[T any, R any] struct {
 }
 
 // newMPMCStrategy creates a new MPMC queue strategy with the given configuration
-func newMPMCStrategy[T any, R any](bounded bool, capacity int) *mpmc[T, R] {
+func newMPMCStrategy[T any, R any](conf *processorConfig[T, R], bounded bool, capacity int) *mpmc[T, R] {
 	return &mpmc[T, R]{
 		queue: newMPMCQueue[*submittedTask[T, R]](capacity, bounded),
+		conf:  conf,
 		quit:  make(chan struct{}),
 	}
 }
@@ -240,6 +241,7 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *processorConf
 		quit:         make(chan struct{}),
 		workerQueues: make([]*wsDeque[T, R], conf.workerCount),
 		workerCount:  conf.workerCount,
+		conf:         conf,
 	}
 
 	for i := range conf.workerCount {
