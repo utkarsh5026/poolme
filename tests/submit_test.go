@@ -13,7 +13,7 @@ import (
 )
 
 func TestWorkerPool_Submit_BasicFunctionality(t *testing.T) {
-	pool := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
+	pool := pool.NewScheduler[int, string](pool.WithWorkerCount(2))
 
 	processFn := func(ctx context.Context, task int) (string, error) {
 		return fmt.Sprintf("result-%d", task), nil
@@ -43,7 +43,7 @@ func TestWorkerPool_Submit_BasicFunctionality(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_MultipleSubmissions(t *testing.T) {
-	p := pool.NewWorkerPool[int, int](pool.WithWorkerCount(4))
+	p := pool.NewScheduler[int, int](pool.WithWorkerCount(4))
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		return task * 2, nil
@@ -80,7 +80,7 @@ func TestWorkerPool_Submit_MultipleSubmissions(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_ErrorHandling(t *testing.T) {
-	p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
+	p := pool.NewScheduler[int, string](pool.WithWorkerCount(2))
 
 	processFn := func(ctx context.Context, task int) (string, error) {
 		if task%2 == 0 {
@@ -125,7 +125,7 @@ func TestWorkerPool_Submit_ErrorHandling(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_BeforeStart(t *testing.T) {
-	p := pool.NewWorkerPool[int, string]()
+	p := pool.NewScheduler[int, string]()
 
 	_, err := p.Submit(42)
 	if err == nil {
@@ -137,7 +137,7 @@ func TestWorkerPool_Submit_BeforeStart(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_AfterShutdown(t *testing.T) {
-	p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
+	p := pool.NewScheduler[int, string](pool.WithWorkerCount(2))
 	processFn := func(ctx context.Context, task int) (string, error) {
 		return "result", nil
 	}
@@ -164,7 +164,7 @@ func TestWorkerPool_Submit_AfterShutdown(t *testing.T) {
 func TestWorkerPool_Submit_WithRetry(t *testing.T) {
 	var attemptCount atomic.Int32
 
-	p := pool.NewWorkerPool[int, string](
+	p := pool.NewScheduler[int, string](
 		pool.WithWorkerCount(1),
 		pool.WithRetryPolicy(3, 10*time.Millisecond),
 	)
@@ -207,7 +207,7 @@ func TestWorkerPool_Submit_WithHooks(t *testing.T) {
 	var endCount atomic.Int32
 	var retryCount atomic.Int32
 
-	p := pool.NewWorkerPool[int, string](
+	p := pool.NewScheduler[int, string](
 		pool.WithWorkerCount(1),
 		pool.WithRetryPolicy(2, 10*time.Millisecond),
 		pool.WithBeforeTaskStart(func(task int) {
@@ -262,7 +262,7 @@ func TestWorkerPool_Submit_WithHooks(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_ConcurrentSubmissions(t *testing.T) {
-	p := pool.NewWorkerPool[int, int](pool.WithWorkerCount(8))
+	p := pool.NewScheduler[int, int](pool.WithWorkerCount(8))
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		time.Sleep(10 * time.Millisecond)
@@ -333,7 +333,7 @@ func TestWorkerPool_Submit_ConcurrentSubmissions(t *testing.T) {
 func TestWorkerPool_Submit_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
+	p := pool.NewScheduler[int, string](pool.WithWorkerCount(2))
 
 	processFn := func(ctx context.Context, task int) (string, error) {
 		select {
@@ -367,7 +367,7 @@ func TestWorkerPool_Submit_ContextCancellation(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_LongRunningStability(t *testing.T) {
-	p := pool.NewWorkerPool[int, int](pool.WithWorkerCount(4))
+	p := pool.NewScheduler[int, int](pool.WithWorkerCount(4))
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		time.Sleep(time.Millisecond)
@@ -414,7 +414,7 @@ func TestWorkerPool_Submit_LongRunningStability(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_WithGetWithContext(t *testing.T) {
-	p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(2))
+	p := pool.NewScheduler[int, string](pool.WithWorkerCount(2))
 
 	processFn := func(ctx context.Context, task int) (string, error) {
 		time.Sleep(100 * time.Millisecond)
@@ -448,7 +448,7 @@ func TestWorkerPool_Submit_WithGetWithContext(t *testing.T) {
 }
 
 func TestWorkerPool_Submit_TaskIDIncrement(t *testing.T) {
-	p := pool.NewWorkerPool[int, int](pool.WithWorkerCount(1))
+	p := pool.NewScheduler[int, int](pool.WithWorkerCount(1))
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		return task, nil

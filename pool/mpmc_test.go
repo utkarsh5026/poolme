@@ -443,7 +443,7 @@ func TestWorkerPool_MPMC_UnboundedQueue(t *testing.T) {
 }
 
 func TestWorkerPool_MPMC_StartSubmitShutdown(t *testing.T) {
-	pool := NewWorkerPool[int, string](
+	pool := NewScheduler[int, string](
 		WithWorkerCount(4),
 		WithMPMCQueue(),
 	)
@@ -482,14 +482,13 @@ func TestWorkerPool_MPMC_StartSubmitShutdown(t *testing.T) {
 		}
 	}
 
-	// Shutdown
 	if err := pool.Shutdown(10 * time.Second); err != nil {
 		t.Fatalf("failed to shutdown pool: %v", err)
 	}
 }
 
 func TestWorkerPool_MPMC_ConcurrentSubmitters(t *testing.T) {
-	pool := NewWorkerPool[int, int](
+	pool := NewScheduler[int, int](
 		WithWorkerCount(8),
 		WithMPMCQueue(),
 	)
