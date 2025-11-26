@@ -79,8 +79,8 @@ func main() {
 	fmt.Printf("   • Expected Time: ~%v\n\n", expectedTime.Round(time.Second))
 	fmt.Printf("💡 Note: Each job sleeps to simulate real work. This is intentional!\n\n")
 
-	// Create worker pool with priority queue
-	workerPool := pool.NewWorkerPool[Job, string](
+	// Create scheduler with priority queue
+	scheduler := pool.NewScheduler[Job, string](
 		pool.WithWorkerCount(workerCount),
 		pool.WithPriorityQueue(func(job Job) int {
 			return job.Priority
@@ -107,8 +107,8 @@ func main() {
 
 	ctx := context.Background()
 
-	// Start the worker pool
-	err := workerPool.Start(ctx, processFn)
+	// Start the scheduler
+	err := scheduler.Start(ctx, processFn)
 	if err != nil {
 		panic(err)
 	}
@@ -137,7 +137,7 @@ func main() {
 
 	// Submit all jobs
 	for _, job := range jobs {
-		_, err := workerPool.Submit(job)
+		_, err := scheduler.Submit(job)
 		if err != nil {
 			fmt.Printf("Error submitting job %d: %v\n", job.ID, err)
 		}
@@ -176,7 +176,7 @@ func main() {
 	}()
 
 	// Wait for all jobs to complete
-	err = workerPool.Shutdown(30 * time.Second)
+	err = scheduler.Shutdown(30 * time.Second)
 	done <- true
 	if err != nil {
 		fmt.Printf("\n❌ Error during shutdown: %v\n", err)

@@ -75,14 +75,14 @@ func runBenchmark(ctx context.Context, tasks []Task, workerCount int, useWorkSte
 		tasksPerWorker: make(map[int]int),
 	}
 
-	var workerPool *pool.WorkerPool[Task, float64]
+	var scheduler *pool.Scheduler[Task, float64]
 	if useWorkStealing {
-		workerPool = pool.NewWorkerPool[Task, float64](
+		scheduler = pool.NewScheduler[Task, float64](
 			pool.WithWorkerCount(workerCount),
 			pool.WithWorkStealing(),
 		)
 	} else {
-		workerPool = pool.NewWorkerPool[Task, float64](
+		scheduler = pool.NewScheduler[Task, float64](
 			pool.WithWorkerCount(workerCount),
 		)
 	}
@@ -93,20 +93,20 @@ func runBenchmark(ctx context.Context, tasks []Task, workerCount int, useWorkSte
 		return result, nil
 	}
 
-	err := workerPool.Start(ctx, processFn)
+	err := scheduler.Start(ctx, processFn)
 	if err != nil {
 		panic(err)
 	}
 
 	startTime := time.Now()
 	for _, task := range tasks {
-		_, err := workerPool.Submit(task)
+		_, err := scheduler.Submit(task)
 		if err != nil {
 			fmt.Printf("Error submitting task %d: %v\n", task.ID, err)
 		}
 	}
 
-	err = workerPool.Shutdown(60 * time.Second)
+	err = scheduler.Shutdown(60 * time.Second)
 	if err != nil {
 		fmt.Printf("Error during shutdown: %v\n", err)
 	}

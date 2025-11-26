@@ -73,9 +73,9 @@ func runWithMPMC(ctx context.Context, submitterCount, tasksPerSubmitter, workerC
 		}
 	}
 
-	workerPool := pool.NewWorkerPool[Task, Result](opts...)
+	scheduler := pool.NewScheduler[Task, Result](opts...)
 
-	err := workerPool.Start(ctx, processTask)
+	err := scheduler.Start(ctx, processTask)
 	if err != nil {
 		panic(err)
 	}
@@ -97,7 +97,7 @@ func runWithMPMC(ctx context.Context, submitterCount, tasksPerSubmitter, workerC
 			submissionStart := time.Now()
 
 			for _, task := range tasks {
-				_, err := workerPool.Submit(task)
+				_, err := scheduler.Submit(task)
 				if err != nil {
 					fmt.Printf("Submitter %d: Error submitting task %d: %v\n", submitterID, task.ID, err)
 					metrics.failedSubmissions.Add(1)
@@ -113,7 +113,7 @@ func runWithMPMC(ctx context.Context, submitterCount, tasksPerSubmitter, workerC
 	wg.Wait()
 
 	// Shutdown and wait for all tasks to complete
-	err = workerPool.Shutdown(60 * time.Second)
+	err = scheduler.Shutdown(60 * time.Second)
 	if err != nil {
 		fmt.Printf("Error during shutdown: %v\n", err)
 	}
@@ -124,12 +124,12 @@ func runWithMPMC(ctx context.Context, submitterCount, tasksPerSubmitter, workerC
 
 // runWithChannel executes tasks using channel strategy with multiple concurrent submitters
 func runWithChannel(ctx context.Context, submitterCount, tasksPerSubmitter, workerCount int) (time.Duration, *PerformanceMetrics) {
-	workerPool := pool.NewWorkerPool[Task, Result](
+	scheduler := pool.NewScheduler[Task, Result](
 		pool.WithWorkerCount(workerCount),
 		pool.WithTaskBuffer(1024),
 	)
 
-	err := workerPool.Start(ctx, processTask)
+	err := scheduler.Start(ctx, processTask)
 	if err != nil {
 		panic(err)
 	}
@@ -151,7 +151,7 @@ func runWithChannel(ctx context.Context, submitterCount, tasksPerSubmitter, work
 			submissionStart := time.Now()
 
 			for _, task := range tasks {
-				_, err := workerPool.Submit(task)
+				_, err := scheduler.Submit(task)
 				if err != nil {
 					fmt.Printf("Submitter %d: Error submitting task %d: %v\n", submitterID, task.ID, err)
 					metrics.failedSubmissions.Add(1)
@@ -167,7 +167,7 @@ func runWithChannel(ctx context.Context, submitterCount, tasksPerSubmitter, work
 	wg.Wait()
 
 	// Shutdown and wait for all tasks to complete
-	err = workerPool.Shutdown(60 * time.Second)
+	err = scheduler.Shutdown(60 * time.Second)
 	if err != nil {
 		fmt.Printf("Error during shutdown: %v\n", err)
 	}
