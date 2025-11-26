@@ -3,6 +3,8 @@ package benchmarks
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -1044,4 +1046,92 @@ func BenchmarkStrategy_ExtremeImbalance(b *testing.B) {
 			}
 		})
 	}
+}
+
+// =============================================================================
+// Benchmark Workload Generators
+// =============================================================================
+
+// cpuBoundWork simulates a CPU-intensive operation
+func cpuBoundWork(iterations int) func(ctx context.Context, task int) (int, error) {
+	return func(ctx context.Context, task int) (int, error) {
+		result := 0
+		for i := range iterations {
+			result += i * task
+		}
+		return result, nil
+	}
+}
+
+// ioBoundWork simulates an I/O operation with a delay
+func ioBoundWork(delay time.Duration) func(ctx context.Context, task int) (int, error) {
+	return func(ctx context.Context, task int) (int, error) {
+		select {
+		case <-time.After(delay):
+			return task * 2, nil
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+}
+
+// mixedWork simulates a realistic workload with variable processing time
+func mixedWork() func(ctx context.Context, task int) (int, error) {
+	return func(ctx context.Context, task int) (int, error) {
+		// Simulate variable processing time (0-10ms)
+		delay := time.Duration(task%10) * time.Millisecond
+		time.Sleep(delay)
+
+		// Do some computation
+		result := 0
+		for i := range 1000 {
+			result += i
+		}
+		return result + task, nil
+	}
+}
+
+// errorProneWork occasionally returns errors for retry testing
+func errorProneWork(errorRate float64) func(ctx context.Context, task int) (int, error) {
+	var attempts sync.Map
+	return func(ctx context.Context, task int) (int, error) {
+		val, _ := attempts.LoadOrStore(task, new(atomic.Int32))
+		count := val.(*atomic.Int32).Add(1)
+
+		if count == 1 && rand.Float64() < errorRate {
+			return 0, fmt.Errorf("simulated error for task %d", task)
+		}
+		return task * 2, nil
+	}
+}
+
+func percentile(latencies []time.Duration, p float64) time.Duration {
+	if len(latencies) == 0 {
+		return 0
+	}
+
+	// Create a copy and sort
+	sorted := make([]time.Duration, len(latencies))
+	copy(sorted, latencies)
+
+	// Simple bubble sort (fine for benchmark data)
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[i] > sorted[j] {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	// Calculate index using the nearest-rank method
+	// For p=0.50 with 100 elements, we want the 50th element (index 49)
+	index := int(math.Round(p * float64(len(sorted)-1)))
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(sorted) {
+		index = len(sorted) - 1
+	}
+
+	return sorted[index]
 }
