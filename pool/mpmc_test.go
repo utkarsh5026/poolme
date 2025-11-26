@@ -328,8 +328,7 @@ func TestMPMCQueue_TryDequeue(t *testing.T) {
 	ctx := context.Background()
 
 	// Try dequeue from empty queue
-	val, ok := queue.TryDequeue()
-	if ok {
+	if _, ok := queue.TryDequeue(); ok {
 		t.Error("expected TryDequeue to return false on empty queue")
 	}
 
@@ -342,7 +341,7 @@ func TestMPMCQueue_TryDequeue(t *testing.T) {
 
 	// Try dequeue should succeed
 	for i := range 3 {
-		val, ok = queue.TryDequeue()
+		val, ok := queue.TryDequeue()
 		if !ok {
 			t.Errorf("expected TryDequeue to succeed, got false")
 		}
@@ -352,8 +351,7 @@ func TestMPMCQueue_TryDequeue(t *testing.T) {
 	}
 
 	// Try dequeue from empty queue again
-	val, ok = queue.TryDequeue()
-	if ok {
+	if _, ok := queue.TryDequeue(); ok {
 		t.Error("expected TryDequeue to return false after draining")
 	}
 }
