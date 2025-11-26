@@ -7,12 +7,25 @@ import (
 	"time"
 )
 
+// executeSubmitted executes a submitted task and sends the result to its associated future.
+// This function is called by workers to process tasks that were submitted via SubmitWithFuture.
+// It wraps the task execution logic and ensures the result is properly delivered to the waiting future.
+func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], conf *processorConfig[T, R], executor ProcessFunc[T, R]) error {
+	result, err := executeTask(ctx, conf, s.task, executor)
+	s.future.result <- Result[R, int64]{
+		Value: result,
+		Error: err,
+		Key:   s.id,
+	}
+	return err
+}
+
 // worker is the core worker function that processes tasks from the task channel.
 // It includes panic recovery to prevent a single task from crashing the entire pool.
 // This function is generic over the key type K to support different task types.
 func worker[T any, R any, K comparable](
-	conf *processorConfig[T, R],
 	ctx context.Context,
+	conf *processorConfig[T, R],
 	taskChan <-chan task[T, K],
 	resultChan chan<- Result[R, K],
 	processFn ProcessFunc[T, R],

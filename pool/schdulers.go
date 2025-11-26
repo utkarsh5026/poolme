@@ -30,17 +30,18 @@ func (s *channelStrategy[T, R]) Shutdown() {
 	close(s.taskChan)
 }
 
-func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) {
+func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
-
+			return nil
 		case t, ok := <-s.taskChan:
 			if !ok {
-				return
+				return nil
 			}
-			executeSubmitted(ctx, t, s.config, executor)
+			if err := executeSafely(ctx, t, s.config, executor); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -69,7 +70,7 @@ func (s *mpmc[T, R]) Submit(task *submittedTask[T, R]) error {
 }
 
 // worker is the main worker loop that dequeues and executes tasks
-func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) {
+func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) error {
 	quitCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -87,16 +88,18 @@ func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor Proces
 		if err != nil {
 			if err == ErrQueueClosed || err == context.Canceled {
 				s.drainQueue(ctx, executor)
-				return
+				return nil
 			}
 			if ctx.Err() != nil {
 				s.drainQueue(ctx, executor)
-				return
+				return nil
 			}
 			continue
 		}
 
-		executeSubmitted(ctx, task, s.conf, executor)
+		if err := executeSubmitted(ctx, task, s.conf, executor); err != nil && !s.conf.continueOnErr {
+			return err
+		}
 	}
 }
 
@@ -127,12 +130,10 @@ type priorityQueueStrategy[T any, R any] struct {
 }
 
 // newPriorityQueueStrategy creates a new priority queue-based scheduling strategy.
-func newPriorityQueueStrategy[T any, R any](conf *processorConfig[T, R]) *priorityQueueStrategy[T, R] {
-	queue := make([]*submittedTask[T, R], 0, conf.taskBuffer)
-	return newPriorityQueueWithQueue(conf, queue)
-}
-
-func newPriorityQueueWithQueue[T any, R any](conf *processorConfig[T, R], tasks []*submittedTask[T, R]) *priorityQueueStrategy[T, R] {
+func newPriorityQueueStrategy[T any, R any](conf *processorConfig[T, R], tasks []*submittedTask[T, R]) *priorityQueueStrategy[T, R] {
+	if tasks == nil {
+		tasks = make([]*submittedTask[T, R], 0, conf.taskBuffer)
+	}
 	return &priorityQueueStrategy[T, R]{
 		pq:            newPriorityQueue(tasks, conf.pqFunc),
 		conf:          conf,
@@ -153,16 +154,16 @@ func (s *priorityQueueStrategy[T, R]) Submit(task *submittedTask[T, R]) error {
 
 // Worker is the main loop for worker goroutines using priority queue scheduling.
 // Workers wait for task signals and then batch-process all available tasks in priority order.
-func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) {
+func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) error {
 	for {
 		select {
 		case <-ctx.Done():
 			s.drain(ctx, executor)
-			return
+			return nil
 
 		case _, ok := <-s.availableChan:
 			if !ok {
-				return
+				return nil
 			}
 
 			for {
@@ -176,7 +177,9 @@ func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64
 				if !ok {
 					panic("priorityQueueStrategy.Worker: invalid type assertion")
 				}
-				executeSubmitted(ctx, task, s.conf, executor)
+				if err := executeSafely(ctx, task, s.conf, executor); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -265,7 +268,7 @@ func (s *workSteal[T, R]) Submit(task *submittedTask[T, R]) error {
 
 // worker is the main loop for each worker goroutine.
 // It follows the work-stealing algorithm: local work -> global batch -> steal -> backoff
-func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) {
+func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) error {
 	localQueue := s.workerQueues[workerID]
 	var missCount, globalCounter int
 
@@ -273,10 +276,10 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 		if globalCounter%10 == 0 {
 			select {
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			case <-s.quit:
 				s.drain(ctx, localQueue, executor)
-				return
+				return nil
 			default:
 			}
 		}
@@ -284,14 +287,18 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 
 		for range fastCheckCounter {
 			if t := localQueue.PopBack(); t != nil {
-				executeSubmitted(ctx, t, s.conf, executor)
+				if err := executeSafely(ctx, t, s.conf, executor); err != nil {
+					return err
+				}
 				missCount = 0
 			}
 		}
 
 		if s.globalQueue.Len() > 0 {
 			if t := s.globalQueue.PopFront(); t != nil {
-				executeSubmitted(ctx, t, s.conf, executor)
+				if err := executeSafely(ctx, t, s.conf, executor); err != nil {
+					return err
+				}
 				missCount = 0
 
 				batchCount := min(s.globalQueue.Len(), batchStealSize-1)
@@ -305,7 +312,9 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 		}
 
 		if t := s.steal(int(workerID)); t != nil {
-			executeSubmitted(ctx, t, s.conf, executor)
+			if err := executeSafely(ctx, t, s.conf, executor); err != nil {
+				return err
+			}
 			missCount = 0
 			continue
 		}
