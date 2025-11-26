@@ -48,7 +48,11 @@ func (pq *priorityQueue[T, R]) Swap(i, j int) {
 // Push inserts a new task into the priority queue.
 // This is intended to meet the heap.Interface contract.
 func (pq *priorityQueue[T, R]) Push(x any) {
-	pq.queue = append(pq.queue, x.(*submittedTask[T, R]))
+	task, ok := x.(*submittedTask[T, R])
+	if !ok {
+		panic("priorityQueue.Push: invalid type assertion")
+	}
+	pq.queue = append(pq.queue, task)
 }
 
 // Pop removes and returns the task with the highest priority (lowest value).
@@ -128,9 +132,12 @@ func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64
 					s.mu.Unlock()
 					break
 				}
-				item := heap.Pop(s.pq).(*submittedTask[T, R])
+				task, ok := heap.Pop(s.pq).(*submittedTask[T, R])
 				s.mu.Unlock()
-				executeSubmitted(ctx, item, pool, executor)
+				if !ok {
+					panic("priorityQueueStrategy.Worker: invalid type assertion")
+				}
+				executeSubmitted(ctx, task, pool, executor)
 			}
 		}
 	}
@@ -156,8 +163,11 @@ func (s *priorityQueueStrategy[T, R]) drain(ctx context.Context, executor Proces
 			return
 		}
 
-		item := heap.Pop(s.pq).(*submittedTask[T, R])
+		task, ok := heap.Pop(s.pq).(*submittedTask[T, R])
 		s.mu.Unlock()
-		executeSubmitted(ctx, item, pool, executor)
+		if !ok {
+			panic("priorityQueueStrategy.drain: invalid type assertion")
+		}
+		executeSubmitted(ctx, task, pool, executor)
 	}
 }
