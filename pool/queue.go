@@ -367,8 +367,8 @@ type wsDeque[T, R any] struct {
 	_    [cacheLinePadding - 8]byte
 
 	// Tail index - modified only by owner worker
-	// No padding needed as only owner touches it
-	tail int64
+	// Uses atomic operations to ensure visibility to stealers reading in PopFront
+	tail atomic.Int64
 
 	// Capacity (power of 2)
 	capacity uint64
@@ -405,7 +405,7 @@ func newWSDeque[T, R any](capacity int) *wsDeque[T, R] {
 //   - Uses atomic store for tail to ensure visibility to stealing workers
 //   - Load of head uses acquire semantics to synchronize with stealing operations
 func (w *wsDeque[T, R]) PushBack(t *submittedTask[T, R]) {
-	tail := w.tail
+	tail := w.tail.Load()
 	head := w.head.Load()
 	ring := *w.ring.Load()
 
@@ -415,7 +415,7 @@ func (w *wsDeque[T, R]) PushBack(t *submittedTask[T, R]) {
 	}
 
 	ring[tail&int64(w.mask)] = t // #nosec G115 -- intentional conversion for ring indexing with wraparound
-	atomic.StoreInt64(&w.tail, tail+1)
+	w.tail.Store(tail + 1)
 }
 
 // grow doubles the capacity of the deque and copies existing tasks to the new buffer.
@@ -459,12 +459,12 @@ func (w *wsDeque[T, R]) grow(head, tail int64) []*submittedTask[T, R] {
 //   - If the deque has only one element and a concurrent steal occurs, the CAS
 //     operation ensures only one party successfully claims the task
 func (w *wsDeque[T, R]) PopBack() *submittedTask[T, R] {
-	tail := w.tail - 1
-	w.tail = tail
+	tail := w.tail.Load() - 1
+	w.tail.Store(tail)
 
 	head := w.head.Load()
 	if head > tail {
-		w.tail = head
+		w.tail.Store(head)
 		return nil
 	}
 
@@ -475,7 +475,7 @@ func (w *wsDeque[T, R]) PopBack() *submittedTask[T, R] {
 		if !w.head.CompareAndSwap(head, head+1) {
 			t = nil
 		}
-		w.tail = head + 1
+		w.tail.Store(head + 1)
 	}
 
 	return t
@@ -495,7 +495,7 @@ func (w *wsDeque[T, R]) PopBack() *submittedTask[T, R] {
 //   - Multiple failed CAS attempts indicate high contention
 func (w *wsDeque[T, R]) PopFront() *submittedTask[T, R] {
 	head := w.head.Load()
-	tail := atomic.LoadInt64(&w.tail)
+	tail := w.tail.Load()
 
 	if head >= tail {
 		return nil
@@ -521,6 +521,6 @@ func (w *wsDeque[T, R]) PopFront() *submittedTask[T, R] {
 // critical synchronization decisions.
 func (w *wsDeque[T, R]) Len() int {
 	head := w.head.Load()
-	tail := atomic.LoadInt64(&w.tail)
+	tail := w.tail.Load()
 	return int(tail - head)
 }
