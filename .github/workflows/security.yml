@@ -51,7 +51,7 @@ jobs:
       - name: Run gosec
         uses: securego/gosec@master
         with:
-          args: '-no-fail -fmt sarif -out gosec-results.sarif ./...'
+          args: '-no-fail -fmt sarif -out gosec-results.sarif -exclude-dir=examples -exclude-dir=benchmarks ./...'
 
       - name: Upload gosec results
         if: always()

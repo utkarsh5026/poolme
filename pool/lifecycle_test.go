@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -10,7 +11,7 @@ import (
 
 func TestWorkerPool_Start(t *testing.T) {
 	t.Run("successful start", func(t *testing.T) {
-		pool := NewWorkerPool[int, string](WithWorkerCount(4))
+		pool := NewScheduler[int, string](WithWorkerCount(4))
 
 		processFn := func(ctx context.Context, task int) (string, error) {
 			return "result", nil
@@ -32,7 +33,7 @@ func TestWorkerPool_Start(t *testing.T) {
 	})
 
 	t.Run("double start fails", func(t *testing.T) {
-		pool := NewWorkerPool[int, string](WithWorkerCount(2))
+		pool := NewScheduler[int, string](WithWorkerCount(2))
 
 		processFn := func(ctx context.Context, task int) (string, error) {
 			return "result", nil
@@ -54,7 +55,7 @@ func TestWorkerPool_Start(t *testing.T) {
 	})
 
 	t.Run("start with cancelled context", func(t *testing.T) {
-		pool := NewWorkerPool[int, string](WithWorkerCount(2))
+		pool := NewScheduler[int, string](WithWorkerCount(2))
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
@@ -85,7 +86,7 @@ func TestWorkerPool_Start(t *testing.T) {
 
 func TestWorkerPool_Shutdown(t *testing.T) {
 	t.Run("successful shutdown", func(t *testing.T) {
-		pool := NewWorkerPool[int, string](WithWorkerCount(2))
+		pool := NewScheduler[int, string](WithWorkerCount(2))
 
 		processFn := func(ctx context.Context, task int) (string, error) {
 			return "result", nil
@@ -107,7 +108,7 @@ func TestWorkerPool_Shutdown(t *testing.T) {
 	})
 
 	t.Run("shutdown without start fails", func(t *testing.T) {
-		pool := NewWorkerPool[int, string]()
+		pool := NewScheduler[int, string]()
 
 		err := pool.Shutdown(time.Second)
 		if err == nil {
@@ -119,7 +120,7 @@ func TestWorkerPool_Shutdown(t *testing.T) {
 	})
 
 	t.Run("double shutdown fails", func(t *testing.T) {
-		pool := NewWorkerPool[int, string](WithWorkerCount(2))
+		pool := NewScheduler[int, string](WithWorkerCount(2))
 
 		processFn := func(ctx context.Context, task int) (string, error) {
 			return "result", nil
@@ -145,7 +146,7 @@ func TestWorkerPool_Shutdown(t *testing.T) {
 	})
 
 	t.Run("shutdown with zero timeout", func(t *testing.T) {
-		pool := NewWorkerPool[int, string](WithWorkerCount(2))
+		pool := NewScheduler[int, string](WithWorkerCount(2))
 
 		processFn := func(ctx context.Context, task int) (string, error) {
 			time.Sleep(10 * time.Millisecond)
@@ -165,14 +166,14 @@ func TestWorkerPool_Shutdown(t *testing.T) {
 		// Shutdown with zero timeout (wait indefinitely)
 		err = pool.Shutdown(0)
 		if err != nil {
-			t.Errorf("shutdown with zero timeout failed: %v", err)
+			t.Errorf("shutdown with zero timeout should succeed: %v", err)
 		}
 	})
 }
 
 func TestWorkerPool_Shutdown_GracefulWait(t *testing.T) {
 	t.Run("waits for in-flight tasks", func(t *testing.T) {
-		pool := NewWorkerPool[int, int](WithWorkerCount(2))
+		pool := NewScheduler[int, int](WithWorkerCount(2))
 
 		var completedCount atomic.Int32
 
@@ -226,7 +227,7 @@ func TestWorkerPool_Shutdown_GracefulWait(t *testing.T) {
 
 func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
 	t.Run("timeout exceeded", func(t *testing.T) {
-		pool := NewWorkerPool[int, int](WithWorkerCount(1))
+		pool := NewScheduler[int, int](WithWorkerCount(1))
 
 		processFn := func(ctx context.Context, task int) (int, error) {
 			// Long-running task that ignores context
@@ -253,8 +254,8 @@ func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
 		if err == nil {
 			t.Error("expected timeout error")
 		}
-		if err.Error() != "shutdown timeout exceeded" {
-			t.Errorf("expected 'shutdown timeout exceeded', got %v", err)
+		if !errors.Is(err, ErrShutdownTimeout) {
+			t.Errorf("expected ErrShutdownTimeout, got %v", err)
 		}
 
 		// Should timeout around 100ms, not wait for full 2s
@@ -264,7 +265,7 @@ func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
 	})
 
 	t.Run("completes before timeout", func(t *testing.T) {
-		pool := NewWorkerPool[int, int](WithWorkerCount(2))
+		pool := NewScheduler[int, int](WithWorkerCount(2))
 
 		processFn := func(ctx context.Context, task int) (int, error) {
 			time.Sleep(50 * time.Millisecond)
@@ -290,7 +291,7 @@ func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
 }
 
 func TestWorkerPool_Shutdown_InFlightTasks(t *testing.T) {
-	pool := NewWorkerPool[int, string](WithWorkerCount(3))
+	pool := NewScheduler[int, string](WithWorkerCount(3))
 
 	var startedCount atomic.Int32
 	var completedCount atomic.Int32
@@ -357,7 +358,7 @@ func TestWorkerPool_Shutdown_InFlightTasks(t *testing.T) {
 
 func TestWorkerPool_StartShutdown_Cycle(t *testing.T) {
 	t.Run("cannot restart after shutdown", func(t *testing.T) {
-		pool := NewWorkerPool[int, string](WithWorkerCount(2))
+		pool := NewScheduler[int, string](WithWorkerCount(2))
 
 		processFn := func(ctx context.Context, task int) (string, error) {
 			return "result", nil
@@ -384,7 +385,7 @@ func TestWorkerPool_StartShutdown_Cycle(t *testing.T) {
 
 func TestWorkerPool_Lifecycle_Integration(t *testing.T) {
 	t.Run("full lifecycle with submit and shutdown", func(t *testing.T) {
-		pool := NewWorkerPool[int, int](
+		pool := NewScheduler[int, int](
 			WithWorkerCount(4),
 			WithTaskBuffer(10),
 		)
@@ -447,7 +448,7 @@ func TestWorkerPool_Lifecycle_Integration(t *testing.T) {
 func TestWorkerPool_Lifecycle_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	pool := NewWorkerPool[int, int](WithWorkerCount(3))
+	pool := NewScheduler[int, int](WithWorkerCount(3))
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		select {

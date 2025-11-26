@@ -1,4 +1,4 @@
-package pool
+package pool_test
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/utkarsh5026/poolme/pool"
 )
 
 // TestWorkerPool_Backoff_ExponentialBackoff tests that exponential backoff
@@ -15,10 +17,10 @@ func TestWorkerPool_Backoff_ExponentialBackoff(t *testing.T) {
 	initialDelay := 100 * time.Millisecond
 	maxDelay := 5 * time.Second
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(1),
-		WithRetryPolicy(4, initialDelay),
-		WithBackoff(BackoffExponential, initialDelay, maxDelay),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(4, initialDelay),
+		pool.WithBackoff(pool.BackoffExponential, initialDelay, maxDelay),
 	)
 
 	var attemptTimes []time.Time
@@ -69,10 +71,10 @@ func TestWorkerPool_Backoff_JitteredBackoff(t *testing.T) {
 	maxDelay := 5 * time.Second
 	jitterFactor := 0.2 // ±20% jitter
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(1),
-		WithRetryPolicy(3, initialDelay),
-		WithJitteredBackoff(initialDelay, maxDelay, jitterFactor),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(3, initialDelay),
+		pool.WithJitteredBackoff(initialDelay, maxDelay, jitterFactor),
 	)
 
 	var attemptTimes []time.Time
@@ -119,10 +121,10 @@ func TestWorkerPool_Backoff_DecorrelatedJitter(t *testing.T) {
 	initialDelay := 100 * time.Millisecond
 	maxDelay := 5 * time.Second
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(1),
-		WithRetryPolicy(5, initialDelay),
-		WithDecorrelatedJitter(initialDelay, maxDelay),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(5, initialDelay),
+		pool.WithDecorrelatedJitter(initialDelay, maxDelay),
 	)
 
 	var attemptTimes []time.Time
@@ -165,10 +167,10 @@ func TestWorkerPool_Backoff_MaxDelayRespected(t *testing.T) {
 	initialDelay := 100 * time.Millisecond
 	maxDelay := 300 * time.Millisecond // Low max to test capping
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(1),
-		WithRetryPolicy(5, initialDelay),
-		WithBackoff(BackoffExponential, initialDelay, maxDelay),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(5, initialDelay),
+		pool.WithBackoff(pool.BackoffExponential, initialDelay, maxDelay),
 	)
 
 	var attemptTimes []time.Time
@@ -203,10 +205,10 @@ func TestWorkerPool_Backoff_SuccessAfterRetry(t *testing.T) {
 	initialDelay := 50 * time.Millisecond
 	maxDelay := 5 * time.Second
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(1),
-		WithRetryPolicy(5, initialDelay),
-		WithBackoff(BackoffExponential, initialDelay, maxDelay),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(5, initialDelay),
+		pool.WithBackoff(pool.BackoffExponential, initialDelay, maxDelay),
 	)
 
 	var attemptCount atomic.Int32
@@ -257,11 +259,11 @@ func TestWorkerPool_Backoff_WithHooks(t *testing.T) {
 	var retryErrors []error
 	var mu sync.Mutex
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(1),
-		WithRetryPolicy(4, initialDelay),
-		WithBackoff(BackoffExponential, initialDelay, maxDelay),
-		WithOnEachAttempt(func(task int, attempt int, err error) {
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(4, initialDelay),
+		pool.WithBackoff(pool.BackoffExponential, initialDelay, maxDelay),
+		pool.WithOnEachAttempt(func(task int, attempt int, err error) {
 			mu.Lock()
 			retryAttempts = append(retryAttempts, attempt)
 			retryErrors = append(retryErrors, err)
@@ -306,10 +308,10 @@ func TestWorkerPool_Backoff_ContextCancellationDuringBackoff(t *testing.T) {
 	initialDelay := 1 * time.Second // Long delay
 	maxDelay := 10 * time.Second
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(1),
-		WithRetryPolicy(5, initialDelay),
-		WithBackoff(BackoffExponential, initialDelay, maxDelay),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(5, initialDelay),
+		pool.WithBackoff(pool.BackoffExponential, initialDelay, maxDelay),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -356,10 +358,10 @@ func TestWorkerPool_Backoff_MultipleTasksIndependentBackoff(t *testing.T) {
 	initialDelay := 50 * time.Millisecond
 	maxDelay := 5 * time.Second
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(3),
-		WithRetryPolicy(3, initialDelay),
-		WithBackoff(BackoffExponential, initialDelay, maxDelay),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(3),
+		pool.WithRetryPolicy(3, initialDelay),
+		pool.WithBackoff(pool.BackoffExponential, initialDelay, maxDelay),
 	)
 
 	var attemptCounts sync.Map // map[int]int32
@@ -412,11 +414,11 @@ func TestWorkerPool_Backoff_WithContinueOnError(t *testing.T) {
 	initialDelay := 20 * time.Millisecond
 	maxDelay := 5 * time.Second
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(2),
-		WithContinueOnError(true),
-		WithRetryPolicy(3, initialDelay),
-		WithBackoff(BackoffExponential, initialDelay, maxDelay),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(2),
+		pool.WithContinueOnError(true),
+		pool.WithRetryPolicy(3, initialDelay),
+		pool.WithBackoff(pool.BackoffExponential, initialDelay, maxDelay),
 	)
 
 	var attemptCounts sync.Map
@@ -489,38 +491,38 @@ func TestWorkerPool_Backoff_WithContinueOnError(t *testing.T) {
 func TestWorkerPool_Backoff_DifferentBackoffTypes(t *testing.T) {
 	tests := []struct {
 		name        string
-		setupPool   func() *WorkerPool[int, int]
+		setupPool   func() *pool.WorkerPool[int, int]
 		description string
 	}{
 		{
 			name: "exponential backoff",
-			setupPool: func() *WorkerPool[int, int] {
-				return NewWorkerPool[int, int](
-					WithWorkerCount(1),
-					WithRetryPolicy(3, 50*time.Millisecond),
-					WithBackoff(BackoffExponential, 50*time.Millisecond, 5*time.Second),
+			setupPool: func() *pool.WorkerPool[int, int] {
+				return pool.NewWorkerPool[int, int](
+					pool.WithWorkerCount(1),
+					pool.WithRetryPolicy(3, 50*time.Millisecond),
+					pool.WithBackoff(pool.BackoffExponential, 50*time.Millisecond, 5*time.Second),
 				)
 			},
 			description: "should use exponential backoff",
 		},
 		{
 			name: "jittered backoff",
-			setupPool: func() *WorkerPool[int, int] {
-				return NewWorkerPool[int, int](
-					WithWorkerCount(1),
-					WithRetryPolicy(3, 50*time.Millisecond),
-					WithJitteredBackoff(50*time.Millisecond, 5*time.Second, 0.2),
+			setupPool: func() *pool.WorkerPool[int, int] {
+				return pool.NewWorkerPool[int, int](
+					pool.WithWorkerCount(1),
+					pool.WithRetryPolicy(3, 50*time.Millisecond),
+					pool.WithJitteredBackoff(50*time.Millisecond, 5*time.Second, 0.2),
 				)
 			},
 			description: "should use jittered backoff with ±20% randomization",
 		},
 		{
 			name: "decorrelated jitter",
-			setupPool: func() *WorkerPool[int, int] {
-				return NewWorkerPool[int, int](
-					WithWorkerCount(1),
-					WithRetryPolicy(3, 50*time.Millisecond),
-					WithDecorrelatedJitter(50*time.Millisecond, 5*time.Second),
+			setupPool: func() *pool.WorkerPool[int, int] {
+				return pool.NewWorkerPool[int, int](
+					pool.WithWorkerCount(1),
+					pool.WithRetryPolicy(3, 50*time.Millisecond),
+					pool.WithDecorrelatedJitter(50*time.Millisecond, 5*time.Second),
 				)
 			},
 			description: "should use AWS-style decorrelated jitter",
@@ -565,11 +567,11 @@ func TestWorkerPool_Backoff_WithRateLimit(t *testing.T) {
 	initialDelay := 50 * time.Millisecond
 	maxDelay := 5 * time.Second
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(2),
-		WithRetryPolicy(3, initialDelay),
-		WithBackoff(BackoffExponential, initialDelay, maxDelay),
-		WithRateLimit(10, 5), // 10 tasks/sec, burst 5
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(2),
+		pool.WithRetryPolicy(3, initialDelay),
+		pool.WithBackoff(pool.BackoffExponential, initialDelay, maxDelay),
+		pool.WithRateLimit(10, 5), // 10 tasks/sec, burst 5
 	)
 
 	var attemptCount atomic.Int32
@@ -611,10 +613,10 @@ func TestWorkerPool_Backoff_WithRateLimit(t *testing.T) {
 // TestWorkerPool_Backoff_ZeroInitialDelay tests that backoff works
 // correctly when initial delay is zero.
 func TestWorkerPool_Backoff_ZeroInitialDelay(t *testing.T) {
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(1),
-		WithRetryPolicy(3, 0), // Zero initial delay
-		WithBackoff(BackoffExponential, 0, 5*time.Second),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(3, 0), // Zero initial delay
+		pool.WithBackoff(pool.BackoffExponential, 0, 5*time.Second),
 	)
 
 	var attemptCount atomic.Int32
@@ -638,89 +640,6 @@ func TestWorkerPool_Backoff_ZeroInitialDelay(t *testing.T) {
 	}
 }
 
-// TestWorkerPool_Backoff_ProcessStream tests that backoff works
-// correctly with streaming processing.
-func TestWorkerPool_Backoff_ProcessStream(t *testing.T) {
-	initialDelay := 30 * time.Millisecond
-	maxDelay := 5 * time.Second
-
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(2),
-		WithRetryPolicy(3, initialDelay),
-		WithBackoff(BackoffExponential, initialDelay, maxDelay),
-	)
-
-	taskChan := make(chan int, 5)
-	go func() {
-		defer close(taskChan)
-		for i := 1; i <= 3; i++ {
-			taskChan <- i
-		}
-	}()
-
-	var attemptCounts sync.Map
-
-	processFn := func(ctx context.Context, task int) (int, error) {
-		val, _ := attemptCounts.LoadOrStore(task, new(atomic.Int32))
-		count := val.(*atomic.Int32).Add(1)
-
-		// Task 1 succeeds immediately
-		if task == 1 {
-			return task * 2, nil
-		}
-		// Task 2 succeeds on second attempt
-		if task == 2 && count >= 2 {
-			return task * 2, nil
-		}
-		// Task 3 succeeds on third attempt
-		if task == 3 && count >= 3 {
-			return task * 2, nil
-		}
-
-		return 0, errors.New("temporary failure")
-	}
-
-	resultChan, errChan := pool.ProcessStream(context.Background(), taskChan, processFn)
-
-	// Collect results
-	var results []int
-	for result := range resultChan {
-		if result != 0 {
-			results = append(results, result)
-		}
-	}
-
-	// Check for errors
-	select {
-	case err := <-errChan:
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	default:
-	}
-
-	// Verify all tasks eventually succeeded
-	if len(results) != 3 {
-		t.Errorf("expected 3 successful results, got %d", len(results))
-	}
-
-	// Verify retry counts
-	val1, _ := attemptCounts.Load(1)
-	if count1 := val1.(*atomic.Int32).Load(); count1 != 1 {
-		t.Errorf("task 1: expected 1 attempt, got %d", count1)
-	}
-
-	val2, _ := attemptCounts.Load(2)
-	if count2 := val2.(*atomic.Int32).Load(); count2 != 2 {
-		t.Errorf("task 2: expected 2 attempts, got %d", count2)
-	}
-
-	val3, _ := attemptCounts.Load(3)
-	if count3 := val3.(*atomic.Int32).Load(); count3 != 3 {
-		t.Errorf("task 3: expected 3 attempts, got %d", count3)
-	}
-}
-
 // TestWorkerPool_Backoff_HighConcurrency tests that backoff works
 // correctly under high concurrency.
 func TestWorkerPool_Backoff_HighConcurrency(t *testing.T) {
@@ -731,10 +650,10 @@ func TestWorkerPool_Backoff_HighConcurrency(t *testing.T) {
 	initialDelay := 10 * time.Millisecond
 	maxDelay := 1 * time.Second
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(10),
-		WithRetryPolicy(3, initialDelay),
-		WithBackoff(BackoffDecorrelated, initialDelay, maxDelay),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(10),
+		pool.WithRetryPolicy(3, initialDelay),
+		pool.WithBackoff(pool.BackoffDecorrelated, initialDelay, maxDelay),
 	)
 
 	taskCount := 100

@@ -1,4 +1,4 @@
-package pool
+package pool_test
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/utkarsh5026/poolme/pool"
 )
 
 // TestHooksBasic demonstrates basic hook usage
@@ -14,14 +16,14 @@ func TestHooksBasic(t *testing.T) {
 	var mu sync.Mutex
 	events := []string{}
 
-	wp := NewWorkerPool[int, string](
-		WithWorkerCount(2),
-		WithBeforeTaskStart(func(task int) {
+	wp := pool.NewWorkerPool[int, string](
+		pool.WithWorkerCount(2),
+		pool.WithBeforeTaskStart(func(task int) {
 			mu.Lock()
 			events = append(events, fmt.Sprintf("start:%d", task))
 			mu.Unlock()
 		}),
-		WithOnTaskEnd(func(task int, result string, err error) {
+		pool.WithOnTaskEnd(func(task int, result string, err error) {
 			mu.Lock()
 			if err != nil {
 				events = append(events, fmt.Sprintf("end:%d:error", task))
@@ -80,10 +82,10 @@ func TestHooksWithRetry(t *testing.T) {
 	var mu sync.Mutex
 	retries := make(map[int][]int) // task -> attempts
 
-	wp := NewWorkerPool[int, string](
-		WithWorkerCount(1),
-		WithRetryPolicy(3, 10*time.Millisecond),
-		WithOnEachAttempt(func(task int, attempt int, err error) {
+	wp := pool.NewWorkerPool[int, string](
+		pool.WithWorkerCount(1),
+		pool.WithRetryPolicy(3, 10*time.Millisecond),
+		pool.WithOnEachAttempt(func(task int, attempt int, err error) {
 			mu.Lock()
 			retries[task] = append(retries[task], attempt)
 			mu.Unlock()
@@ -127,9 +129,9 @@ func TestHooksWithError(t *testing.T) {
 	var mu sync.Mutex
 	var lastError error
 
-	wp := NewWorkerPool[int, string](
-		WithWorkerCount(2),
-		WithOnTaskEnd(func(task int, result string, err error) {
+	wp := pool.NewWorkerPool[int, string](
+		pool.WithWorkerCount(2),
+		pool.WithOnTaskEnd(func(task int, result string, err error) {
 			mu.Lock()
 			if err != nil {
 				lastError = err
@@ -173,8 +175,8 @@ func TestHooksTypeSafety(t *testing.T) {
 		}()
 
 		// This should panic because we're using string hook with int pool
-		stringHook := WithBeforeTaskStart(func(task string) {})
-		_ = NewWorkerPool[int, string](stringHook)
+		stringHook := pool.WithBeforeTaskStart(func(task string) {})
+		_ = pool.NewWorkerPool[int, string](stringHook)
 	})
 
 	t.Run("onTaskEnd type mismatch", func(t *testing.T) {
@@ -190,8 +192,8 @@ func TestHooksTypeSafety(t *testing.T) {
 		}()
 
 		// This should panic because result type is wrong
-		wrongHook := WithOnTaskEnd(func(task int, result int, err error) {})
-		_ = NewWorkerPool[int, string](wrongHook)
+		wrongHook := pool.WithOnTaskEnd(func(task int, result int, err error) {})
+		_ = pool.NewWorkerPool[int, string](wrongHook)
 	})
 
 	t.Run("onRetry type mismatch", func(t *testing.T) {
@@ -207,8 +209,8 @@ func TestHooksTypeSafety(t *testing.T) {
 		}()
 
 		// This should panic because task type is wrong
-		wrongHook := WithOnEachAttempt(func(task string, attempt int, err error) {})
-		_ = NewWorkerPool[int, string](wrongHook)
+		wrongHook := pool.WithOnEachAttempt(func(task string, attempt int, err error) {})
+		_ = pool.NewWorkerPool[int, string](wrongHook)
 	})
 }
 
@@ -217,9 +219,9 @@ func TestHooksWithProcessMap(t *testing.T) {
 	var mu sync.Mutex
 	processedKeys := []string{}
 
-	wp := NewWorkerPool[string, int](
-		WithWorkerCount(2),
-		WithBeforeTaskStart(func(task string) {
+	wp := pool.NewWorkerPool[string, int](
+		pool.WithWorkerCount(2),
+		pool.WithBeforeTaskStart(func(task string) {
 			mu.Lock()
 			processedKeys = append(processedKeys, task)
 			mu.Unlock()

@@ -1,4 +1,4 @@
-package pool
+package pool_test
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/utkarsh5026/poolme/pool"
 )
 
 func TestWorkerPool_RateLimit_BasicThroughput(t *testing.T) {
@@ -15,9 +17,9 @@ func TestWorkerPool_RateLimit_BasicThroughput(t *testing.T) {
 	burst := 5
 	numTasks := 25
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(10),
-		WithRateLimit(tasksPerSecond, burst),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(10),
+		pool.WithRateLimit(tasksPerSecond, burst),
 	)
 
 	processFn := func(ctx context.Context, task int) (int, error) {
@@ -64,9 +66,9 @@ func TestWorkerPool_RateLimit_BurstBehavior(t *testing.T) {
 	burst := 10
 	numTasks := 10
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(10),
-		WithRateLimit(tasksPerSecond, burst),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(10),
+		pool.WithRateLimit(tasksPerSecond, burst),
 	)
 
 	processFn := func(ctx context.Context, task int) (int, error) {
@@ -99,9 +101,9 @@ func TestWorkerPool_RateLimit_BurstBehavior(t *testing.T) {
 
 func TestWorkerPool_RateLimit_WithContextCancellation(t *testing.T) {
 	// Test that rate limiting respects context cancellation
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(5),
-		WithRateLimit(2, 1), // Very slow: 2 tasks/sec
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(5),
+		pool.WithRateLimit(2, 1), // Very slow: 2 tasks/sec
 	)
 
 	processFn := func(ctx context.Context, task int) (int, error) {
@@ -137,8 +139,8 @@ func TestWorkerPool_RateLimit_WithContextCancellation(t *testing.T) {
 
 func TestWorkerPool_RateLimit_WithoutRateLimiting(t *testing.T) {
 	// Test that pool works normally without rate limiting (backwards compatibility)
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(10),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(10),
 		// No rate limit configured
 	)
 
@@ -185,9 +187,9 @@ func TestWorkerPool_RateLimit_ProcessMap(t *testing.T) {
 	burst := 3
 	numTasks := 20
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(5),
-		WithRateLimit(tasksPerSecond, burst),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(5),
+		pool.WithRateLimit(tasksPerSecond, burst),
 	)
 
 	processFn := func(ctx context.Context, task int) (int, error) {
@@ -195,7 +197,7 @@ func TestWorkerPool_RateLimit_ProcessMap(t *testing.T) {
 	}
 
 	tasks := make(map[string]int)
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		tasks[fmt.Sprintf("task-%d", i)] = i
 	}
 
@@ -213,52 +215,6 @@ func TestWorkerPool_RateLimit_ProcessMap(t *testing.T) {
 
 	// With 20 tasks at 10 tasks/sec (burst 3), minimum time should be ~1.7 seconds
 	expectedMinDuration := 1500 * time.Millisecond
-	if elapsed < expectedMinDuration {
-		t.Errorf("rate limiting should slow down processing; took %v (expected at least %v)", elapsed, expectedMinDuration)
-	}
-}
-
-func TestWorkerPool_RateLimit_ProcessStream(t *testing.T) {
-	// Test rate limiting works with ProcessStream
-	tasksPerSecond := 20.0
-	burst := 5
-	numTasks := 30
-
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(5),
-		WithRateLimit(tasksPerSecond, burst),
-	)
-
-	processFn := func(ctx context.Context, task int) (int, error) {
-		return task + 100, nil
-	}
-
-	taskChan := make(chan int, numTasks)
-	for i := 0; i < numTasks; i++ {
-		taskChan <- i
-	}
-	close(taskChan)
-
-	start := time.Now()
-	resultChan, errChan := pool.ProcessStream(context.Background(), taskChan, processFn)
-
-	results := []int{}
-	for result := range resultChan {
-		results = append(results, result)
-	}
-
-	if err := <-errChan; err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	elapsed := time.Since(start)
-
-	if len(results) != numTasks {
-		t.Fatalf("expected %d results, got %d", numTasks, len(results))
-	}
-
-	// With 30 tasks at 20 tasks/sec (burst 5), minimum time should be ~1.25 seconds
-	expectedMinDuration := 1200 * time.Millisecond
 	if elapsed < expectedMinDuration {
 		t.Errorf("rate limiting should slow down processing; took %v (expected at least %v)", elapsed, expectedMinDuration)
 	}
@@ -282,9 +238,9 @@ func TestWorkerPool_RateLimit_InvalidParameters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](
-				WithWorkerCount(2),
-				WithRateLimit(tt.tasksPerSecond, tt.burst),
+			pool := pool.NewWorkerPool[int, int](
+				pool.WithWorkerCount(2),
+				pool.WithRateLimit(tt.tasksPerSecond, tt.burst),
 			)
 
 			tasks := []int{1, 2, 3}
@@ -319,9 +275,9 @@ func TestWorkerPool_RateLimit_ConcurrentWorkers(t *testing.T) {
 	numTasks := 100
 	numWorkers := 20
 
-	pool := NewWorkerPool[int, int](
-		WithWorkerCount(numWorkers),
-		WithRateLimit(tasksPerSecond, burst),
+	pool := pool.NewWorkerPool[int, int](
+		pool.WithWorkerCount(numWorkers),
+		pool.WithRateLimit(tasksPerSecond, burst),
 	)
 
 	var processedCount atomic.Int32

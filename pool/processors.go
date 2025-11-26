@@ -3,34 +3,27 @@ package pool
 import (
 	"context"
 	"sync"
-
-	"golang.org/x/sync/errgroup"
 )
 
 // sliceProcessor orchestrates parallel processing of a slice of tasks with result ordering.
-// It supports idempotent single-execution via sync.Once and buffering/channels to ensure
-// safe concurrent worker processing and results collection.
+// Uses scheduling strategies for task distribution with result handlers for efficient collection.
 //
 // Type parameters:
 //   - T: The task input type
 //   - R: The result output type
 type sliceProcessor[T, R any] struct {
-	tasks     []T                 // tasks to process, in order
-	processFn ProcessFunc[T, R]   // processing function for each task
-	taskChan  chan task[T, int]   // channel used to dispatch tasks to workers
-	resChan   chan Result[R, int] // channel for collecting processed results
-	pool      *WorkerPool[T, R]   // reference to shared worker pool/config
-	once      sync.Once           // ensures single execution
+	tasks     []T                    // tasks to process, in order
+	processFn ProcessFunc[T, R]      // processing function for each task
+	conf      *processorConfig[T, R] // reference to shared processor configuration
+	once      sync.Once              // ensures single execution
 }
 
 // newSliceProcessor constructs a sliceProcessor for the given tasks, process function, and pool.
-func newSliceProcessor[T, R any](tasks []T, processFn ProcessFunc[T, R], wp *WorkerPool[T, R]) *sliceProcessor[T, R] {
+func newSliceProcessor[T, R any](tasks []T, processFn ProcessFunc[T, R], conf *processorConfig[T, R]) *sliceProcessor[T, R] {
 	return &sliceProcessor[T, R]{
 		tasks:     tasks,
 		processFn: processFn,
-		taskChan:  make(chan task[T, int], wp.taskBuffer),
-		resChan:   make(chan Result[R, int], len(tasks)),
-		pool:      wp,
+		conf:      conf,
 	}
 }
 
@@ -47,88 +40,48 @@ func (s *sliceProcessor[T, R]) Process(ctx context.Context, workerCount int) ([]
 	return results, processErr
 }
 
-// process executes the internal flow: spinning up workers, producing tasks, and collecting results.
+// process executes the internal flow using scheduling strategies with result handlers.
 func (s *sliceProcessor[T, R]) process(ctx context.Context, workerCount int) ([]R, error) {
 	if len(s.tasks) == 0 {
 		return []R{}, nil
 	}
 
-	g, ctx := errgroup.WithContext(ctx)
-	for range workerCount {
-		g.Go(func() error {
-			return worker(s.pool, ctx, s.taskChan, s.resChan, s.processFn)
-		})
+	orderMap := make(map[int64]int, len(s.tasks))
+	results := make([]R, len(s.tasks))
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	submittedTasks := make([]*submittedTask[T, R], len(s.tasks))
+	for i, task := range s.tasks {
+		submittedTasks[i] = &submittedTask[T, R]{
+			task:   task,
+			id:     int64(i),
+			future: nil,
+		}
+		orderMap[int64(i)] = i
 	}
 
-	// Producer: feeds all tasks to taskChan
-	g.Go(func() error {
-		return s.produce(ctx)
+	err := runScheduler(ctx, workerCount, s.conf, submittedTasks, s.processFn, func(r *Result[R, int64]) {
+		if idx, ok := orderMap[r.Key]; ok && idx >= 0 && idx < len(results) {
+			results[idx] = r.Value
+		}
 	})
 
-	results := make([]R, len(s.tasks))
-	var wg sync.WaitGroup
-	var err error
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err = s.collect(results)
-	}()
-
-	if gErr := g.Wait(); gErr != nil {
-		close(s.resChan)
-		wg.Wait()
-		return results, gErr
-	}
-
-	close(s.resChan)
-	wg.Wait()
 	return results, err
 }
 
-// produce feeds the tasks into taskChan for worker consumption; closes channel when done.
-// Respects ctx cancellation and returns context error if aborted before completion.
-func (s *sliceProcessor[T, R]) produce(ctx context.Context) error {
-	defer close(s.taskChan)
-	for idx, t := range s.tasks {
-		it := &indexedTask[T]{index: idx, task: t}
-		select {
-		case s.taskChan <- it:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return nil
-}
-
-// collect reads all results from resChan, storing them in the proper order.
-// If any error is encountered, it is returned after all results are collected.
-func (s *sliceProcessor[T, R]) collect(results []R) error {
-	var collectionErr error
-	for result := range s.resChan {
-		if result.Error != nil {
-			collectionErr = result.Error
-			continue
-		}
-		if result.Key >= 0 && result.Key < len(results) {
-			results[result.Key] = result.Value
-		}
-	}
-	return collectionErr
-}
-
 // mapProcessor orchestrates parallel processing of map tasks for batch processing with proper key/result mapping.
+// Uses scheduling strategies for task distribution with result handlers for efficient collection.
 //
 // Type parameters:
 //   - T: The task input type
 //   - R: The result output type
 type mapProcessor[T, R any] struct {
-	taskChan  chan task[T, string]   // channel for dispatching keyed tasks to workers
-	resChan   chan Result[R, string] // channel for collecting processed results
-	pool      *WorkerPool[T, R]      // reference to shared worker pool/config
-	tasks     map[string]T           // input tasks map (keyed)
-	processFn ProcessFunc[T, R]      // processing function for each task
-	once      sync.Once              // ensures single execution
+	tasks     map[string]T      // input tasks map (keyed)
+	processFn ProcessFunc[T, R] // processing function for each task
+	pool      *WorkerPool[T, R] // reference to shared worker pool/config
+	once      sync.Once         // ensures single execution
 }
 
 // newMapProcessor constructs a mapProcessor for the given keyed tasks, function, and pool.
@@ -136,8 +89,6 @@ func newMapProcessor[T, R any](tasks map[string]T, processFn ProcessFunc[T, R], 
 	return &mapProcessor[T, R]{
 		tasks:     tasks,
 		processFn: processFn,
-		taskChan:  make(chan task[T, string], wp.taskBuffer),
-		resChan:   make(chan Result[R, string], len(tasks)),
 		pool:      wp,
 	}
 }
@@ -155,160 +106,104 @@ func (m *mapProcessor[T, R]) Process(ctx context.Context, workerCount int) (map[
 	return r, err
 }
 
-// process coordinates worker startup, task production, and keyed result aggregation.
+// process coordinates worker startup, task production, and keyed result aggregation using strategies.
 func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[string]R, error) {
 	if len(m.tasks) == 0 {
 		return map[string]R{}, nil
 	}
 
-	g, ctx := errgroup.WithContext(ctx)
-	for range workerCount {
-		g.Go(func() error {
-			return worker(m.pool, ctx, m.taskChan, m.resChan, m.processFn)
-		})
-	}
-
-	g.Go(func() error {
-		return m.produce(ctx)
-	})
-
+	keyMap := make(map[int64]string, len(m.tasks))
 	results := make(map[string]R, len(m.tasks))
-	var wg sync.WaitGroup
-	var err error
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err = m.collect(results)
-	}()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	if gerr := g.Wait(); gerr != nil {
-		close(m.resChan)
-		wg.Wait()
-		return results, gerr
+	submittedTasks := make([]*submittedTask[T, R], 0, len(m.tasks))
+	taskID := int64(0)
+	for key, task := range m.tasks {
+		st := &submittedTask[T, R]{
+			task:   task,
+			id:     taskID,
+			future: nil,
+		}
+		keyMap[taskID] = key
+		submittedTasks = append(submittedTasks, st)
+		taskID++
 	}
 
-	close(m.resChan)
-	wg.Wait()
+	err := runScheduler(ctx, workerCount, m.pool.conf, submittedTasks, m.processFn, func(r *Result[R, int64]) {
+		if stringKey, ok := keyMap[r.Key]; ok {
+			results[stringKey] = r.Value
+		}
+	})
 	return results, err
 }
 
-// produce feeds all tasks in the map to taskChan for processing, keyed by the original map key.
-// Returns context error if aborted, otherwise nil.
-func (m *mapProcessor[T, R]) produce(ctx context.Context) error {
-	defer close(m.taskChan)
-	for key, t := range m.tasks {
-		kt := &keyedTask[T, string]{key: key, task: t}
-		select {
-		case m.taskChan <- kt:
-		case <-ctx.Done():
-			return ctx.Err()
+// collect receives results from a channel and invokes a callback for each result.
+// It collects exactly n results and returns the first error encountered, if any.
+//
+// The function continues collecting all n results even after encountering an error,
+// ensuring proper cleanup and allowing the callback to process all results.
+func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Result[R, int64])) error {
+	var firstErr error
+	for range n {
+		result, ok := <-resChan
+		if !ok {
+			break
+		}
+		if result != nil && result.Error != nil && firstErr == nil {
+			firstErr = result.Error
+		}
+		if result != nil {
+			onResult(result)
 		}
 	}
-	return nil
+
+	return firstErr
 }
 
-// collect reads results for map tasks and aggregates them by the original key in the results map.
-// If any result has a non-nil error, the last error is returned after collecting all results.
-func (m *mapProcessor[T, R]) collect(results map[string]R) error {
-	var collectionErr error
-	for result := range m.resChan {
-		if result.Error != nil {
-			collectionErr = result.Error
-			continue
-		}
-		results[result.Key] = result.Value
+// startWorkers spawns the specified number of worker goroutines and manages their lifecycle.
+//
+// Each worker pulls tasks from the scheduling strategy and processes them using the provided
+// process function and result handler. The function automatically closes the result channel
+// once all workers have completed.
+func startWorkers[T, R any](ctx context.Context, workers int, strategy schedulingStrategy[T, R], f ProcessFunc[T, R], h resultHandler[T, R], resChan chan *Result[R, int64]) {
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := range workers {
+		go func(workerID int) {
+			defer wg.Done()
+			_ = strategy.Worker(ctx, int64(workerID), f, h)
+		}(i)
 	}
-	return collectionErr
-}
-
-type streamProcessor[T, R any] struct {
-	taskChan         <-chan T // channel for dispatching tasks to workers
-	pool             *WorkerPool[T, R]
-	once             sync.Once
-	internalTaskChan chan task[T, int]
-	internalResChan  chan Result[R, int]
-}
-
-func newStreamProcessor[T, R any](wp *WorkerPool[T, R], taskChan <-chan T) *streamProcessor[T, R] {
-	return &streamProcessor[T, R]{
-		pool:             wp,
-		taskChan:         taskChan,
-		internalTaskChan: make(chan task[T, int], wp.taskBuffer),
-		internalResChan:  make(chan Result[R, int], wp.taskBuffer),
-	}
-}
-
-func (s *streamProcessor[T, R]) Process(ctx context.Context, processFn ProcessFunc[T, R], workerCount int) (resultChan <-chan R, errChan <-chan error) {
-	s.once.Do(func() {
-		resultChan, errChan = s.process(ctx, processFn, workerCount)
-	})
-	return
-}
-
-func (s *streamProcessor[T, R]) process(ctx context.Context, processFn ProcessFunc[T, R], workerCount int) (<-chan R, <-chan error) {
-	resChan := make(chan R, s.pool.taskBuffer)
-	errChan := make(chan error, 1)
-
-	g, ctx := errgroup.WithContext(ctx)
-	for range workerCount {
-		g.Go(func() error {
-			return worker(s.pool, ctx, s.internalTaskChan, s.internalResChan, processFn)
-		})
-	}
-
-	g.Go(func() error {
-		return s.produce(ctx)
-	})
 
 	go func() {
-		defer close(resChan)
-		defer close(errChan)
-
-		var wg sync.WaitGroup
-		var err error
-
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-			s.collect(resChan, &err)
-		}()
-
-		gerr := g.Wait()
-		close(s.internalResChan)
-
 		wg.Wait()
-
-		if gerr != nil {
-			errChan <- gerr
-			return
-		}
-
-		errChan <- err
+		close(resChan)
 	}()
-
-	return resChan, errChan
 }
 
-func (s *streamProcessor[T, R]) produce(ctx context.Context) error {
-	defer close(s.internalTaskChan)
-	for t := range s.taskChan {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			s.internalTaskChan <- &indexedTask[T]{task: t, index: -1}
-		}
+// runScheduler orchestrates the complete task processing workflow using a scheduling strategy.
+//
+// This function creates the scheduling strategy, submits all tasks, starts workers, and collects
+// results. It automatically handles strategy cleanup and error propagation.
+func runScheduler[T, R any](ctx context.Context, workerCount int, conf *processorConfig[T, R], tasks []*submittedTask[T, R], p ProcessFunc[T, R], onResult func(r *Result[R, int64])) error {
+	s, err := createSchedulingStrategy(conf, nil)
+	if err != nil {
+		return err
 	}
-	return nil
-}
+	defer s.Shutdown()
 
-func (s *streamProcessor[T, R]) collect(resChan chan<- R, err *error) {
-	for result := range s.internalResChan {
-		if result.Error != nil {
-			*err = result.Error
-		}
-		resChan <- result.Value
+	resChan := make(chan *Result[R, int64], len(tasks))
+	handler := func(task *submittedTask[T, R], result *Result[R, int64]) {
+		resChan <- result
 	}
+
+	submittedCount, err := s.SubmitBatch(tasks)
+	if err != nil {
+		return err
+	}
+
+	startWorkers(ctx, workerCount, s, p, handler, resChan)
+	return collect(submittedCount, resChan, onResult)
 }

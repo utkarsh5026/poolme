@@ -7,38 +7,13 @@ import (
 	"time"
 )
 
-// worker is the core worker function that processes tasks from the task channel.
-// It includes panic recovery to prevent a single task from crashing the entire pool.
-// This function is generic over the key type K to support different task types.
-func worker[T any, R any, K comparable](
-	wp *WorkerPool[T, R],
-	ctx context.Context,
-	taskChan <-chan task[T, K],
-	resultChan chan<- Result[R, K],
-	processFn ProcessFunc[T, R],
-) error {
-	for {
-		select {
-		case t, ok := <-taskChan:
-			if !ok {
-				return nil
-			}
-
-			actualTask := t.Task()
-			result, err := executeTask(ctx, wp, actualTask, processFn)
-
-			select {
-			case resultChan <- Result[R, K]{Value: result, Error: err, Key: t.Key()}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			if err != nil && !wp.continueOnError {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+// executeSubmitted executes a submitted task and sends the result to its associated future.
+// This function is called by workers to process tasks that were submitted via SubmitWithFuture.
+// It wraps the task execution logic and ensures the result is properly delivered to the waiting future.
+func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], conf *processorConfig[T, R], executor ProcessFunc[T, R], handler resultHandler[T, R]) error {
+	result, err := executeTask(ctx, conf, s.task, executor)
+	handler(s, newResult(result, s.id, err))
+	return err
 }
 
 // executeTask encapsulates the common logic for executing a task with hooks, rate limiting, and processing.
@@ -46,25 +21,25 @@ func worker[T any, R any, K comparable](
 // It handles rate limiting, hook execution (beforeTaskStart and onTaskEnd), and task processing with retry.
 func executeTask[T, R any](
 	ctx context.Context,
-	wp *WorkerPool[T, R],
+	conf *processorConfig[T, R],
 	task T,
 	processFn ProcessFunc[T, R],
 ) (R, error) {
-	if wp.rateLimiter != nil {
-		if err := wp.rateLimiter.Wait(ctx); err != nil {
+	if conf.rateLimiter != nil {
+		if err := conf.rateLimiter.Wait(ctx); err != nil {
 			var zero R
 			return zero, err
 		}
 	}
 
-	if wp.beforeTaskStart != nil {
-		wp.beforeTaskStart(task)
+	if conf.beforeTaskStart != nil {
+		conf.beforeTaskStart(task)
 	}
 
-	result, err := processWithRecovery(ctx, wp, task, processFn)
+	result, err := processWithRecovery(ctx, conf, task, processFn)
 
-	if wp.onTaskEnd != nil {
-		wp.onTaskEnd(task, result, err)
+	if conf.onTaskEnd != nil {
+		conf.onTaskEnd(task, result, err)
 	}
 
 	return result, err
@@ -75,7 +50,7 @@ func executeTask[T, R any](
 // Retries use exponential backoff if initialDelay is configured.
 func processWithRecovery[T, R any](
 	ctx context.Context,
-	wp *WorkerPool[T, R],
+	conf *processorConfig[T, R],
 	task T,
 	processFn ProcessFunc[T, R],
 ) (result R, err error) {
@@ -87,7 +62,7 @@ func processWithRecovery[T, R any](
 		}
 	}()
 
-	return processWithRetry(ctx, task, wp, processFn)
+	return processWithRetry(ctx, task, conf, processFn)
 }
 
 // processWithRetry executes the given processFn for the task, retrying up to wp.maxAttempts times on error.
@@ -98,12 +73,12 @@ func processWithRecovery[T, R any](
 func processWithRetry[T, R any](
 	ctx context.Context,
 	task T,
-	wp *WorkerPool[T, R],
+	conf *processorConfig[T, R],
 	processFn ProcessFunc[T, R],
 ) (R, error) {
 	var result R
 	var err error
-	maxAttempts := max(wp.maxAttempts, 1)
+	maxAttempts := max(conf.maxAttempts, 1)
 
 	for attempt := range maxAttempts {
 		select {
@@ -112,8 +87,8 @@ func processWithRetry[T, R any](
 		default:
 		}
 
-		if attempt > 0 && wp.backoffStrategy != nil {
-			delay := wp.backoffStrategy.NextDelay(attempt-1, err)
+		if attempt > 0 && conf.backoffStrategy != nil {
+			delay := conf.backoffStrategy.NextDelay(attempt-1, err)
 			if delay > 0 {
 				select {
 				case <-time.After(delay):
@@ -128,8 +103,8 @@ func processWithRetry[T, R any](
 			return result, nil
 		}
 
-		if wp.onRetry != nil && attempt < maxAttempts-1 {
-			wp.onRetry(task, attempt+1, err)
+		if conf.onRetry != nil && attempt < maxAttempts-1 {
+			conf.onRetry(task, attempt+1, err)
 		}
 	}
 
