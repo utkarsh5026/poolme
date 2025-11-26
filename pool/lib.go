@@ -75,7 +75,7 @@ func (wp *Scheduler[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, R
 		return errors.New("pool already started")
 	}
 
-	strategy, err := createSchedulingStrategy[T, R](wp.config, nil)
+	strategy, err := createSchedulingStrategy(wp.config, nil)
 	if err != nil {
 		return err
 	}
@@ -311,38 +311,4 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 ) (map[string]R, error) {
 	mp := newMapProcessor(tasks, processFn, wp)
 	return mp.Process(ctx, min(wp.conf.workerCount, len(tasks)))
-}
-
-// ProcessStream processes tasks from an input channel concurrently using a pool of workers.
-// It returns channels for receiving results and errors, enabling streaming/pipeline processing.
-//
-// Parameters:
-//   - ctx: Context for cancellation and timeout control
-//   - taskChan: Input channel of tasks (caller is responsible for closing it)
-//   - processFn: Function to process each task (func(context.Context, T) (R, error))
-//
-// Returns:
-//   - resultChan: Output channel for receiving results (read-only, auto-closed when done)
-//   - errChan: Channel for receiving errors (read-only)
-//
-// Example:
-//
-//	taskChan := make(chan int, 10)
-//	go func() {
-//	    for i := 0; i < 100; i++ {
-//	        taskChan <- i
-//	    }
-//	    close(taskChan)
-//	}()
-//	resultChan, errChan := pool.ProcessStream(ctx, taskChan, processFunc)
-//	for result := range resultChan {
-//	    fmt.Println(result)
-//	}
-func (wp *WorkerPool[T, R]) ProcessStream(
-	ctx context.Context,
-	taskChan <-chan T,
-	processFn ProcessFunc[T, R],
-) (resultChan <-chan R, errChan <-chan error) {
-	sp := newStreamProcessor(wp, taskChan)
-	return sp.Process(ctx, processFn, wp.conf.workerCount)
 }
