@@ -46,19 +46,8 @@ func (s *sliceProcessor[T, R]) process(ctx context.Context, workerCount int) ([]
 		return []R{}, nil
 	}
 
-	strategy, err := createSchedulingStrategy(s.conf, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer strategy.Shutdown()
-
-	resChan := make(chan *Result[R, int64], len(s.tasks))
 	orderMap := make(map[int64]int, len(s.tasks))
 	results := make([]R, len(s.tasks))
-
-	handler := func(task *submittedTask[T, R], result *Result[R, int64]) {
-		resChan <- result
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -73,42 +62,13 @@ func (s *sliceProcessor[T, R]) process(ctx context.Context, workerCount int) ([]
 		orderMap[int64(i)] = i
 	}
 
-	submittedCount, err := strategy.SubmitBatch(submittedTasks)
-	if err != nil {
-		return nil, err
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(workerCount)
-	for i := 0; i < workerCount; i++ {
-		go func(workerID int) {
-			defer wg.Done()
-			_ = strategy.Worker(ctx, int64(workerID), s.processFn, handler)
-		}(i)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resChan)
-	}()
-
-	var firstErr error
-	for i := 0; i < submittedCount; i++ {
-		result, ok := <-resChan
-		if !ok {
-			break
+	err := runScheduler(ctx, workerCount, s.conf, submittedTasks, s.processFn, func(r *Result[R, int64]) {
+		if idx, ok := orderMap[r.Key]; ok && idx >= 0 && idx < len(results) {
+			results[idx] = r.Value
 		}
-		if result != nil && result.Error != nil && firstErr == nil {
-			firstErr = result.Error
-		}
-		if result != nil {
-			if idx, ok := orderMap[result.Key]; ok && idx >= 0 && idx < len(results) {
-				results[idx] = result.Value
-			}
-		}
-	}
+	})
 
-	return results, firstErr
+	return results, err
 }
 
 // mapProcessor orchestrates parallel processing of map tasks for batch processing with proper key/result mapping.
