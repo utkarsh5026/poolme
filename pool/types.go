@@ -46,52 +46,6 @@ func newResult[R any, K comparable](val R, key K, err error) *Result[R, K] {
 	}
 }
 
-// indexedTask wraps a task with its original index for result ordering.
-// It maintains task order in results while supporting retry logic.
-//
-// Type parameters:
-//   - T: The type of the task being wrapped
-//
-// Fields:
-//   - task: The original task to be processed
-//   - index: The original position of the task in the input slice
-type indexedTask[T any] struct {
-	task  T   // The original task to be processed
-	index int // Original index in the input slice
-}
-
-// task is a generic interface for all task types in the worker pool.
-// It provides a unified way to access the underlying task and its key/identifier.
-//
-// Type parameters:
-//   - T: The type of the task
-//   - K: The type of the key/identifier (must be comparable)
-type task[T any, K comparable] interface {
-	Task() T
-	Key() K
-}
-
-type keyedTask[T any, K comparable] struct {
-	task T
-	key  K
-}
-
-func (kt *keyedTask[T, K]) Task() T {
-	return kt.task
-}
-
-func (kt *keyedTask[T, K]) Key() K {
-	return kt.key
-}
-
-func (it *indexedTask[T]) Task() T {
-	return it.task
-}
-
-func (it *indexedTask[T]) Key() int {
-	return it.index
-}
-
 // Future represents a value that will be available in the future after asynchronous task processing.
 // It provides methods to retrieve results with or without blocking, and supports context-based cancellation.
 //
@@ -228,6 +182,11 @@ type schedulingStrategy[T any, R any] interface {
 	// It handles the logic of where the task goes (Global Queue vs Local Queue).
 	Submit(task *submittedTask[T, R]) error
 
+	// SubmitBatch accepts multiple tasks at once for optimized batch submission.
+	// Strategies can pre-distribute tasks to worker queues, avoiding per-task submission overhead.
+	// Returns the number of tasks successfully submitted and an error if any occurred.
+	SubmitBatch(tasks []*submittedTask[T, R]) (int, error)
+
 	// Shutdown gracefully stops the workers and waits for them to finish.
 	Shutdown()
 
@@ -235,23 +194,53 @@ type schedulingStrategy[T any, R any] interface {
 	Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], resHandler resultHandler[T, R]) error
 }
 
+// processorConfig holds all configuration for a pool of workers and task scheduling.
+// This enables flexible tuning of core pool behavior, retry, backoff, queueing, and hooks.
 type processorConfig[T, R any] struct {
-	workerCount, taskBuffer, maxAttempts int
-	rateLimiter                          *rate.Limiter
-	initialDelay                         time.Duration
-	continueOnErr                        bool
-	schedulingStrategy                   SchedulingStrategyType
+	// Number of worker goroutines in the pool.
+	workerCount int
 
+	// Size of the internal task/result buffer (impacts batching & throughput).
+	taskBuffer int
+
+	// Maximum number of processing attempts per task (for retry logic).
+	maxAttempts int
+
+	// Optional token bucket rate limiter applied per task (may be nil).
+	rateLimiter *rate.Limiter
+
+	// Initial delay before first retry attempt.
+	initialDelay time.Duration
+
+	// If true, worker should continue on task error (don't abort processing on first failure).
+	continueOnErr bool
+
+	// The scheduling strategy used for distributing tasks (Channel, WorkStealing, PriorityQueue, etc).
+	schedulingStrategy SchedulingStrategyType
+
+	// Hook called before a task starts (can be used for logging/tracing).
 	beforeTaskStart func(T)
-	onTaskEnd       func(T, R, error)
-	onRetry         func(T, int, error)
 
+	// Hook called after a task ends (receives the input, result, and error if any).
+	onTaskEnd func(T, R, error)
+
+	// Hook called on retry with the task, current attempt, and last error.
+	onRetry func(T, int, error)
+
+	// Backoff calculation strategy used between retries (exponential, fixed, etc.).
 	backoffStrategy algorithms.BackoffStrategy
 
-	usePq  bool
+	// If true, enable priority queue for scheduling.
+	usePq bool
+
+	// Function that computes priority for a task (lower value = higher priority).
 	pqFunc func(a T) int
 
-	// MPMC queue configuration
-	mpmcBounded  bool
+	// MPMC queue configuration:
+
+	// Use a bounded queue (if true) or unbounded.
+	mpmcBounded bool
+
+	// Explicit queue capacity if using bounded queue.
 	mpmcCapacity int
 }
