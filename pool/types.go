@@ -2,7 +2,13 @@ package pool
 
 import (
 	"context"
+	"fmt"
+	"runtime"
 	"sync"
+	"time"
+
+	"github.com/utkarsh5026/poolme/internal/algorithms"
+	"golang.org/x/time/rate"
 )
 
 // ProcessFunc is a function type that defines how individual tasks are processed in the worker pool.
@@ -218,4 +224,82 @@ type SchedulingStrategy[T any, R any] interface {
 
 	// Worker executes tasks assigned to a specific worker, using the provided executor and pool.
 	Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], pool *WorkerPool[T, R])
+}
+
+type processorConfig[T, R any] struct {
+	workerCount, taskBuffer, maxAttempts int
+	rateLimiter                          *rate.Limiter
+	initialDelay                         time.Duration
+	continueOnErr                        bool
+	schedulingStrategy                   SchedulingStrategyType
+
+	beforeTaskStart func(T)
+	onTaskEnd       func(T, R, error)
+	onRetry         func(T, int, error)
+
+	backoffStrategy algorithms.BackoffStrategy
+
+	usePq  bool
+	pqFunc func(a any) int
+
+	// MPMC queue configuration
+	mpmcBounded  bool
+	mpmcCapacity int
+}
+
+func createConfig[T, R any](opts ...WorkerPoolOption) *processorConfig[T, R] {
+	cfg := &workerPoolConfig{
+		workerCount:         runtime.GOMAXPROCS(0),
+		taskBuffer:          0, // Will be set to workerCount if not specified
+		maxAttempts:         1,
+		initialDelay:        0,
+		backoffType:         BackoffExponential, // Default backoff
+		backoffInitialDelay: 100 * time.Millisecond,
+		backoffMaxDelay:     5 * time.Second,
+		backoffJitterFactor: 0.1, // Default 10% jitter for jittered backoff
+	}
+
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if cfg.taskBuffer == 0 {
+		cfg.taskBuffer = cfg.workerCount
+	}
+
+	if cfg.retryPolicySet {
+		cfg.backoffInitialDelay = cfg.initialDelay
+	}
+
+	backoffStrategy := algorithms.NewBackoffStrategy(
+		cfg.backoffType,
+		cfg.backoffInitialDelay,
+		cfg.backoffMaxDelay,
+		cfg.backoffJitterFactor,
+	)
+
+	var zeroT T
+	var zeroR R
+	expectedTaskType := fmt.Sprintf("%T", zeroT)
+	expectedResultType := fmt.Sprintf("%T", zeroR)
+
+	beforeTaskStart, onTaskEnd, onRetry := checkfuncs[T, R](cfg, expectedTaskType, expectedResultType)
+
+	return &processorConfig[T, R]{
+		workerCount:        cfg.workerCount,
+		taskBuffer:         cfg.taskBuffer,
+		maxAttempts:        cfg.maxAttempts,
+		initialDelay:       cfg.initialDelay,
+		rateLimiter:        cfg.rateLimiter,
+		beforeTaskStart:    beforeTaskStart,
+		onTaskEnd:          onTaskEnd,
+		onRetry:            onRetry,
+		continueOnErr:      cfg.continueOnError,
+		backoffStrategy:    backoffStrategy,
+		schedulingStrategy: cfg.schedulingStrategy,
+		usePq:              cfg.usePq,
+		pqFunc:             cfg.pqFunc,
+		mpmcBounded:        cfg.mpmcBounded,
+		mpmcCapacity:       cfg.mpmcCapacity,
+	}
 }
