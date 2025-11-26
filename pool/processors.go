@@ -46,7 +46,7 @@ func (s *sliceProcessor[T, R]) process(ctx context.Context, workerCount int) ([]
 		return []R{}, nil
 	}
 
-	strategy, err := createSchedulingStrategy[T, R](s.conf, nil)
+	strategy, err := createSchedulingStrategy(s.conf, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +63,21 @@ func (s *sliceProcessor[T, R]) process(ctx context.Context, workerCount int) ([]
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	submittedTasks := make([]*submittedTask[T, R], len(s.tasks))
+	for i, task := range s.tasks {
+		submittedTasks[i] = &submittedTask[T, R]{
+			task:   task,
+			id:     int64(i),
+			future: nil,
+		}
+		orderMap[int64(i)] = i
+	}
+
+	submittedCount, err := strategy.SubmitBatch(submittedTasks)
+	if err != nil {
+		return nil, err
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
 	for i := 0; i < workerCount; i++ {
@@ -72,27 +87,6 @@ func (s *sliceProcessor[T, R]) process(ctx context.Context, workerCount int) ([]
 		}(i)
 	}
 
-	submittedCount := 0
-	for i, task := range s.tasks {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		st := &submittedTask[T, R]{
-			task:   task,
-			id:     int64(i),
-			future: nil,
-		}
-		orderMap[int64(i)] = i
-		if err := strategy.Submit(st); err != nil {
-			return nil, err
-		}
-		submittedCount++
-	}
-
-	// Collect results with ordering
 	go func() {
 		wg.Wait()
 		close(resChan)
@@ -158,13 +152,12 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 		return map[string]R{}, nil
 	}
 
-	strategy, err := createSchedulingStrategy[T, R](m.pool.conf, nil)
+	strategy, err := createSchedulingStrategy(m.pool.conf, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer strategy.Shutdown()
 
-	// Create result collection channel and key mapping
 	resChan := make(chan *Result[R, int64], len(m.tasks))
 	keyMap := make(map[int64]string, len(m.tasks))
 	results := make(map[string]R, len(m.tasks))
@@ -176,35 +169,31 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var wg sync.WaitGroup
-	wg.Add(workerCount)
-	for i := 0; i < workerCount; i++ {
-		go func(workerID int) {
-			defer wg.Done()
-			_ = strategy.Worker(ctx, int64(workerID), m.processFn, handler)
-		}(i)
-	}
-
+	submittedTasks := make([]*submittedTask[T, R], 0, len(m.tasks))
 	taskID := int64(0)
-	submittedCount := 0
 	for key, task := range m.tasks {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
 		st := &submittedTask[T, R]{
 			task:   task,
 			id:     taskID,
 			future: nil,
 		}
 		keyMap[taskID] = key
+		submittedTasks = append(submittedTasks, st)
 		taskID++
-		if err := strategy.Submit(st); err != nil {
-			return nil, err
-		}
-		submittedCount++
+	}
+
+	submittedCount, err := strategy.SubmitBatch(submittedTasks)
+	if err != nil {
+		return nil, err
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+	for i := range workerCount {
+		go func(workerID int) {
+			defer wg.Done()
+			_ = strategy.Worker(ctx, int64(workerID), m.processFn, handler)
+		}(i)
 	}
 
 	go func() {
@@ -212,8 +201,17 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 		close(resChan)
 	}()
 
+	err = collect(submittedCount, resChan, func(r *Result[R, int64]) {
+		if stringKey, ok := keyMap[r.Key]; ok {
+			results[stringKey] = r.Value
+		}
+	})
+	return results, err
+}
+
+func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Result[R, int64])) error {
 	var firstErr error
-	for i := 0; i < submittedCount; i++ {
+	for range n {
 		result, ok := <-resChan
 		if !ok {
 			break
@@ -222,122 +220,9 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 			firstErr = result.Error
 		}
 		if result != nil {
-			if stringKey, ok := keyMap[result.Key]; ok {
-				results[stringKey] = result.Value
-			}
+			onResult(result)
 		}
 	}
 
-	return results, firstErr
-}
-
-type streamProcessor[T, R any] struct {
-	taskChan <-chan T          // external input channel for tasks
-	pool     *WorkerPool[T, R] // reference to worker pool config
-	once     sync.Once         // ensures single execution
-}
-
-func newStreamProcessor[T, R any](wp *WorkerPool[T, R], taskChan <-chan T) *streamProcessor[T, R] {
-	return &streamProcessor[T, R]{
-		pool:     wp,
-		taskChan: taskChan,
-	}
-}
-
-func (s *streamProcessor[T, R]) Process(ctx context.Context, processFn ProcessFunc[T, R], workerCount int) (resultChan <-chan R, errChan <-chan error) {
-	s.once.Do(func() {
-		resultChan, errChan = s.process(ctx, processFn, workerCount)
-	})
-	return
-}
-
-func (s *streamProcessor[T, R]) process(ctx context.Context, processFn ProcessFunc[T, R], workerCount int) (<-chan R, <-chan error) {
-	resChan := make(chan R, s.pool.conf.taskBuffer)
-	errChan := make(chan error, 1)
-
-	// Create ephemeral strategy
-	strategy, err := createSchedulingStrategy[T, R](s.pool.conf, nil)
-	if err != nil {
-		close(resChan)
-		errChan <- err
-		close(errChan)
-		return resChan, errChan
-	}
-
-	// Internal result channel for strategy workers
-	internalResChan := make(chan *Result[R, int64], s.pool.conf.taskBuffer)
-
-	// Shared result handler - sends to internal channel
-	handler := func(task *submittedTask[T, R], result *Result[R, int64]) {
-		internalResChan <- result
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-
-	// Start workers
-	var wg sync.WaitGroup
-	wg.Add(workerCount)
-	for i := 0; i < workerCount; i++ {
-		go func(workerID int) {
-			defer wg.Done()
-			_ = strategy.Worker(ctx, int64(workerID), processFn, handler)
-		}(i)
-	}
-
-	// Task submission goroutine - reads from external channel and submits to strategy
-	go func() {
-		defer strategy.Shutdown()
-		defer cancel()
-
-		taskID := int64(0)
-		for task := range s.taskChan {
-			st := &submittedTask[T, R]{
-				task:   task,
-				id:     taskID,
-				future: nil,
-			}
-			taskID++
-
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				if err := strategy.Submit(st); err != nil {
-					return
-				}
-			}
-		}
-	}()
-
-	// Goroutine to close internal channel after workers finish
-	go func() {
-		wg.Wait()
-		close(internalResChan)
-	}()
-
-	// Result forwarding goroutine - reads from internal channel concurrently with workers
-	go func() {
-		defer close(resChan)
-		defer close(errChan)
-
-		var firstErr error
-		for result := range internalResChan {
-			if result.Error != nil && firstErr == nil {
-				firstErr = result.Error
-			}
-			select {
-			case resChan <- result.Value:
-			case <-ctx.Done():
-				if firstErr == nil {
-					firstErr = ctx.Err()
-				}
-				errChan <- firstErr
-				return
-			}
-		}
-
-		errChan <- firstErr
-	}()
-
-	return resChan, errChan
+	return firstErr
 }
