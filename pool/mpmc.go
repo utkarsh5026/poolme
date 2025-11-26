@@ -72,12 +72,12 @@ func newMPMCQueue[T any](capacity int, bounded bool) *mpmcQueue[T] {
 	ring := make([]mpmcQueueSlot[T], capacity)
 
 	for i := range ring {
-		ring[i].sequence = uint64(i)
+		ring[i].sequence = uint64(i) // #nosec G115 -- i is loop index within valid ring bounds
 	}
 
 	return &mpmcQueue[T]{
 		ring:     ring,
-		mask:     uint64(capacity - 1),
+		mask:     uint64(capacity - 1), // #nosec G115 -- capacity is validated positive, no overflow possible
 		bounded:  bounded,
 		capacity: capacity,
 		notifyC:  make(chan struct{}, 1),
@@ -223,9 +223,9 @@ func (q *mpmcQueue[T]) load(ishead bool) (head uint64, tail uint64, slot *mpmcQu
 	seq := atomic.LoadUint64(&slot.sequence)
 
 	if ishead {
-		diff = int64(seq) - int64(head+1)
+		diff = int64(seq) - int64(head+1) // #nosec G115 -- intentional conversion for sequence comparison
 	} else {
-		diff = int64(seq) - int64(tail)
+		diff = int64(seq) - int64(tail) // #nosec G115 -- intentional conversion for sequence comparison
 	}
 
 	return
@@ -238,7 +238,7 @@ func (q *mpmcQueue[T]) Len() int {
 	tail := atomic.LoadUint64(&q.tail)
 
 	if tail > head {
-		return int(tail - head)
+		return int(tail - head) // #nosec G115 -- safe conversion, tail > head guarantees result fits in int
 	}
 	return 0
 }

@@ -65,9 +65,10 @@ func newWSDeque[T, R any](capacity int) *wsDeque[T, R] {
 	capacity = nextPowerOfTwo(capacity)
 	ring := make([]*submittedTask[T, R], capacity)
 
+	// Safe conversion: capacity is guaranteed to be positive after validation and nextPowerOfTwo
 	dq := &wsDeque[T, R]{
-		mask:     uint64(capacity - 1),
-		capacity: uint64(capacity),
+		mask:     uint64(capacity - 1), // #nosec G115 -- capacity is validated positive, no overflow possible
+		capacity: uint64(capacity),      // #nosec G115 -- capacity is validated positive, no overflow possible
 	}
 
 	dq.ring.Store(&ring)
@@ -91,11 +92,12 @@ func (w *wsDeque[T, R]) PushBack(t *submittedTask[T, R]) {
 	head := w.head.Load()
 	ring := *w.ring.Load()
 
+	// #nosec G115 -- intentional conversion for capacity check, tail-head is safe to convert
 	if uint64(tail-head) >= w.capacity {
 		ring = w.grow(head, tail)
 	}
 
-	ring[tail&int64(w.mask)] = t
+	ring[tail&int64(w.mask)] = t // #nosec G115 -- intentional conversion for ring indexing with wraparound
 	atomic.StoreInt64(&w.tail, tail+1)
 }
 
@@ -118,7 +120,7 @@ func (w *wsDeque[T, R]) grow(head, tail int64) []*submittedTask[T, R] {
 	newRing := make([]*submittedTask[T, R], newCap)
 
 	for i := head; i < tail; i++ {
-		newRing[i&int64(newCap-1)] = old[i&int64(oldCap-1)]
+		newRing[i&int64(newCap-1)] = old[i&int64(oldCap-1)] // #nosec G115 -- intentional conversion for ring indexing
 	}
 
 	w.ring.Store(&newRing)
@@ -150,7 +152,7 @@ func (w *wsDeque[T, R]) PopBack() *submittedTask[T, R] {
 	}
 
 	ring := *w.ring.Load()
-	t := ring[tail&int64(w.mask)]
+	t := ring[tail&int64(w.mask)] // #nosec G115 -- intentional conversion for ring indexing with wraparound
 
 	if head == tail {
 		if !w.head.CompareAndSwap(head, head+1) {
@@ -183,7 +185,7 @@ func (w *wsDeque[T, R]) PopFront() *submittedTask[T, R] {
 	}
 
 	ring := *w.ring.Load()
-	t := ring[head&int64(w.mask)]
+	t := ring[head&int64(w.mask)] // #nosec G115 -- intentional conversion for ring indexing with wraparound
 
 	if !w.head.CompareAndSwap(head, head+1) {
 		return nil
@@ -245,7 +247,7 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, workers int) *workS
 // 2. If local queue is above threshold, add to global queue (load balancing)
 // 3. This gives both cache locality AND prevents queue buildup
 func (s *workSteal[T, R]) Submit(task *submittedTask[T, R]) error {
-	workerID := int(s.nextWorker.Add(1) % uint64(s.workerCount))
+	workerID := int(s.nextWorker.Add(1) % uint64(s.workerCount)) // #nosec G115 -- workerCount is always positive
 	local := s.workerQueues[workerID]
 
 	if local.Len() < localQueueThreshold {
@@ -321,7 +323,7 @@ func (s *workSteal[T, R]) steal(thiefID int) *submittedTask[T, R] {
 	}
 
 	maxAttempts := min(n-1, maxStealAttempts)
-	startIndex := int(s.stealSeed.Add(1) % uint64(n))
+	startIndex := int(s.stealSeed.Add(1) % uint64(n)) // #nosec G115 -- n is workerCount which is always positive
 	thiefQueue := s.workerQueues[thiefID]
 
 	for i := range maxAttempts {
