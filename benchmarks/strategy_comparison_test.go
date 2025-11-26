@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -1088,20 +1087,6 @@ func mixedWork() func(ctx context.Context, task int) (int, error) {
 			result += i
 		}
 		return result + task, nil
-	}
-}
-
-// errorProneWork occasionally returns errors for retry testing
-func errorProneWork(errorRate float64) func(ctx context.Context, task int) (int, error) {
-	var attempts sync.Map
-	return func(ctx context.Context, task int) (int, error) {
-		val, _ := attempts.LoadOrStore(task, new(atomic.Int32))
-		count := val.(*atomic.Int32).Add(1)
-
-		if count == 1 && rand.Float64() < errorRate {
-			return 0, fmt.Errorf("simulated error for task %d", task)
-		}
-		return task * 2, nil
 	}
 }
 
