@@ -10,13 +10,9 @@ import (
 // executeSubmitted executes a submitted task and sends the result to its associated future.
 // This function is called by workers to process tasks that were submitted via SubmitWithFuture.
 // It wraps the task execution logic and ensures the result is properly delivered to the waiting future.
-func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], conf *processorConfig[T, R], executor ProcessFunc[T, R]) error {
+func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], conf *processorConfig[T, R], executor ProcessFunc[T, R], handler resultHandler[T, R]) error {
 	result, err := executeTask(ctx, conf, s.task, executor)
-	s.future.result <- Result[R, int64]{
-		Value: result,
-		Error: err,
-		Key:   s.id,
-	}
+	handler(s, newResult(result, s.id, err))
 	return err
 }
 

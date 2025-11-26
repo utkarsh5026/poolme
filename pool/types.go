@@ -18,6 +18,9 @@ import (
 //   - R: The type of result produced after processing
 type ProcessFunc[T any, R any] func(ctx context.Context, task T) (R, error)
 
+// ResultHandler is a function type for handling the result of a processed task.
+type resultHandler[T, R any] func(task *submittedTask[T, R], result *Result[R, int64])
+
 // Result represents the outcome of processing a single task in the worker pool.
 // It encapsulates both successful results and errors, along with the task's key/identifier.
 //
@@ -33,6 +36,14 @@ type Result[R any, K comparable] struct {
 	Value R     // The result value produced by processing the task
 	Error error // Error encountered during processing, nil if successful
 	Key   K     // Key/identifier of the task
+}
+
+func newResult[R any, K comparable](val R, key K, err error) *Result[R, K] {
+	return &Result[R, K]{
+		Value: val,
+		Key:   key,
+		Error: err,
+	}
 }
 
 // indexedTask wraps a task with its original index for result ordering.
@@ -210,9 +221,9 @@ type submittedTask[T any, R any] struct {
 	future *Future[R, int64]
 }
 
-// SchedulingStrategy defines the behavior for distributing tasks to workers.
+// schedulingStrategy defines the behavior for distributing tasks to workers.
 // Any new algorithm (Work Stealing, Priority Queue, Ring Buffer) must implement this.
-type SchedulingStrategy[T any, R any] interface {
+type schedulingStrategy[T any, R any] interface {
 	// Submit accepts a task into the scheduling system.
 	// It handles the logic of where the task goes (Global Queue vs Local Queue).
 	Submit(task *submittedTask[T, R]) error
@@ -221,7 +232,7 @@ type SchedulingStrategy[T any, R any] interface {
 	Shutdown()
 
 	// Worker executes tasks assigned to a specific worker, using the provided executor and pool.
-	Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R])
+	Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], resHandler resultHandler[T, R]) error
 }
 
 type processorConfig[T, R any] struct {

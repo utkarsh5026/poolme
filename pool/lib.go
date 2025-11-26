@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type Scheduler[T, R any] struct {
@@ -69,7 +71,7 @@ func (wp *Scheduler[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, R
 		return errors.New("pool already started")
 	}
 
-	strategy, err := createSchedulingStrategy[T, R](wp.config)
+	strategy, err := createSchedulingStrategy[T, R](wp.config, nil)
 	if err != nil {
 		return err
 	}
@@ -85,18 +87,20 @@ func (wp *Scheduler[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, R
 	state.started.Store(true)
 
 	n := wp.config.workerCount
-	var wg sync.WaitGroup
-	wg.Add(n)
-	for i := range n {
-		go func(workerID int64) {
-			defer wg.Done()
-			strategy.Worker(ctx, workerID, processFn)
-		}(int64(i))
+	var g errgroup.Group
+
+	var resHandler resultHandler[T, R] = func(t *submittedTask[T, R], r *Result[R, int64]) {
+		t.future.result <- *r
 	}
 
-	// Close done channel when all workers finish
+	for i := range n {
+		g.Go(func() error {
+			return strategy.Worker(ctx, int64(i), processFn, resHandler)
+		})
+	}
+
 	go func() {
-		wg.Wait()
+		g.Wait()
 		close(state.done)
 	}()
 
@@ -223,7 +227,7 @@ type poolState[T any, R any] struct {
 	started       atomic.Bool
 	shutdown      atomic.Bool
 	taskIDCounter atomic.Int64
-	strategy      SchedulingStrategy[T, R]
+	strategy      schedulingStrategy[T, R]
 	done          chan struct{} // Closed when all workers have finished
 }
 

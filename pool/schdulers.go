@@ -30,7 +30,7 @@ func (s *channelStrategy[T, R]) Shutdown() {
 	close(s.taskChan)
 }
 
-func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) error {
+func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], h resultHandler[T, R]) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -39,7 +39,7 @@ func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 			if !ok {
 				return nil
 			}
-			if err := executeSafely(ctx, t, s.config, executor); err != nil {
+			if err := executeSubmitted(ctx, t, s.config, executor, h); err != nil && !s.config.continueOnErr {
 				return err
 			}
 		}
@@ -70,7 +70,7 @@ func (s *mpmc[T, R]) Submit(task *submittedTask[T, R]) error {
 }
 
 // worker is the main worker loop that dequeues and executes tasks
-func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) error {
+func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], h resultHandler[T, R]) error {
 	quitCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -87,30 +87,30 @@ func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor Proces
 		task, err := s.queue.Dequeue(quitCtx)
 		if err != nil {
 			if err == ErrQueueClosed || err == context.Canceled {
-				s.drainQueue(ctx, executor)
+				s.drainQueue(ctx, executor, h)
 				return nil
 			}
 			if ctx.Err() != nil {
-				s.drainQueue(ctx, executor)
+				s.drainQueue(ctx, executor, h)
 				return nil
 			}
 			continue
 		}
 
-		if err := executeSubmitted(ctx, task, s.conf, executor); err != nil && !s.conf.continueOnErr {
+		if err := executeSubmitted(ctx, task, s.conf, executor, h); err != nil && !s.conf.continueOnErr {
 			return err
 		}
 	}
 }
 
 // drainQueue attempts to process any remaining tasks in the queue during shutdown
-func (s *mpmc[T, R]) drainQueue(ctx context.Context, executor ProcessFunc[T, R]) {
+func (s *mpmc[T, R]) drainQueue(ctx context.Context, executor ProcessFunc[T, R], h resultHandler[T, R]) {
 	for {
 		task, ok := s.queue.TryDequeue()
 		if !ok {
 			return
 		}
-		executeSubmitted(ctx, task, s.conf, executor)
+		executeSubmitted(ctx, task, s.conf, executor, h)
 	}
 }
 
@@ -154,11 +154,11 @@ func (s *priorityQueueStrategy[T, R]) Submit(task *submittedTask[T, R]) error {
 
 // Worker is the main loop for worker goroutines using priority queue scheduling.
 // Workers wait for task signals and then batch-process all available tasks in priority order.
-func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) error {
+func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], h resultHandler[T, R]) error {
 	for {
 		select {
 		case <-ctx.Done():
-			s.drain(ctx, executor)
+			s.drain(ctx, executor, h)
 			return nil
 
 		case _, ok := <-s.availableChan:
@@ -177,7 +177,7 @@ func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64
 				if !ok {
 					panic("priorityQueueStrategy.Worker: invalid type assertion")
 				}
-				if err := executeSafely(ctx, task, s.conf, executor); err != nil {
+				if err := executeSubmitted(ctx, task, s.conf, executor, h); err != nil {
 					return err
 				}
 			}
@@ -197,7 +197,7 @@ func (s *priorityQueueStrategy[T, R]) Shutdown() {
 
 // drain processes all remaining tasks in the priority queue during shutdown.
 // This ensures that no tasks are left unprocessed when the strategy is shut down.
-func (s *priorityQueueStrategy[T, R]) drain(ctx context.Context, executor ProcessFunc[T, R]) {
+func (s *priorityQueueStrategy[T, R]) drain(ctx context.Context, executor ProcessFunc[T, R], h resultHandler[T, R]) {
 	for {
 		s.mu.Lock()
 		if s.pq.Len() == 0 {
@@ -210,7 +210,7 @@ func (s *priorityQueueStrategy[T, R]) drain(ctx context.Context, executor Proces
 		if !ok {
 			panic("priorityQueueStrategy.drain: invalid type assertion")
 		}
-		executeSubmitted(ctx, task, s.conf, executor)
+		executeSubmitted(ctx, task, s.conf, executor, h)
 	}
 }
 
@@ -268,7 +268,7 @@ func (s *workSteal[T, R]) Submit(task *submittedTask[T, R]) error {
 
 // worker is the main loop for each worker goroutine.
 // It follows the work-stealing algorithm: local work -> global batch -> steal -> backoff
-func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R]) error {
+func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], h resultHandler[T, R]) error {
 	localQueue := s.workerQueues[workerID]
 	var missCount, globalCounter int
 
@@ -278,7 +278,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-s.quit:
-				s.drain(ctx, localQueue, executor)
+				s.drain(ctx, localQueue, executor, h)
 				return nil
 			default:
 			}
@@ -287,7 +287,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 
 		for range fastCheckCounter {
 			if t := localQueue.PopBack(); t != nil {
-				if err := executeSafely(ctx, t, s.conf, executor); err != nil {
+				if err := executeSubmitted(ctx, t, s.conf, executor, h); err != nil {
 					return err
 				}
 				missCount = 0
@@ -296,7 +296,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 
 		if s.globalQueue.Len() > 0 {
 			if t := s.globalQueue.PopFront(); t != nil {
-				if err := executeSafely(ctx, t, s.conf, executor); err != nil {
+				if err := executeSubmitted(ctx, t, s.conf, executor, h); err != nil {
 					return err
 				}
 				missCount = 0
@@ -312,7 +312,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 		}
 
 		if t := s.steal(int(workerID)); t != nil {
-			if err := executeSafely(ctx, t, s.conf, executor); err != nil {
+			if err := executeSubmitted(ctx, t, s.conf, executor, h); err != nil {
 				return err
 			}
 			missCount = 0
@@ -415,7 +415,7 @@ func (s *workSteal[T, R]) backoff(missCount int) {
 // drain processes any remaining tasks in the local and global queues during shutdown.
 // This ensures that all submitted tasks are completed before the worker exits.
 // Both queues are drained in parallel for faster shutdown.
-func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], executor ProcessFunc[T, R]) {
+func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], executor ProcessFunc[T, R], h resultHandler[T, R]) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -426,7 +426,7 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 			if task == nil {
 				break
 			}
-			executeSubmitted(ctx, task, s.conf, executor)
+			executeSubmitted(ctx, task, s.conf, executor, h)
 		}
 	}()
 
@@ -437,7 +437,7 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 			if task == nil {
 				break
 			}
-			executeSubmitted(ctx, task, s.conf, executor)
+			executeSubmitted(ctx, task, s.conf, executor, h)
 		}
 	}()
 

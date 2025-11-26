@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -223,9 +222,3 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *processorConfig[T, R] {
 	}
 }
 
-func executeSafely[T, R any](ctx context.Context, t *submittedTask[T, R], conf *processorConfig[T, R], executor ProcessFunc[T, R]) error {
-	if err := executeSubmitted(ctx, t, conf, executor); err != nil && !conf.continueOnErr {
-		return err
-	}
-	return nil
-}
