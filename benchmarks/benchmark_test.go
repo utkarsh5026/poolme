@@ -221,53 +221,6 @@ func BenchmarkComprehensive_ModesProcessMap(b *testing.B) {
 	}
 }
 
-func BenchmarkComprehensive_ModesProcessStream(b *testing.B) {
-	workers := 8
-	taskCount := 10000
-	processFunc := cpuBoundWork(100)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		taskChan := make(chan int, 100)
-
-		// Producer goroutine
-		go func() {
-			for j := 0; j < taskCount; j++ {
-				taskChan <- j
-			}
-			close(taskChan)
-		}()
-
-		wp := pool.NewWorkerPool[int, int](pool.WithWorkerCount(workers))
-		resultChan, errChan := wp.ProcessStream(context.Background(), taskChan, processFunc)
-
-		// Consume results
-		count := 0
-		for {
-			select {
-			case _, ok := <-resultChan:
-				if !ok {
-					resultChan = nil
-				} else {
-					count++
-				}
-			case err := <-errChan:
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-
-			if resultChan == nil {
-				break
-			}
-		}
-
-		if count != taskCount {
-			b.Fatalf("expected %d results, got %d", taskCount, count)
-		}
-	}
-}
-
 // =============================================================================
 // Feature Overhead Benchmarks
 // =============================================================================
