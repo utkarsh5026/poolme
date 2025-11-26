@@ -135,16 +135,13 @@ func createSchedulingStrategy[T, R any](conf *processorConfig[T, R], tasks []*su
 
 	switch strategyType {
 	case SchedulingWorkStealing:
-		return newWorkStealingStrategy[T, R](256, conf), nil
+		return newWorkStealingStrategy(256, conf), nil
 
 	case SchedulingPriorityQueue:
 		if conf.pqFunc == nil {
 			return nil, errors.New("priority queue enabled but no priority function provided")
 		}
-		conf.pqFunc = func(task T) int {
-			return conf.pqFunc(task)
-		}
-		return newPriorityQueueStrategy[T, R](conf, tasks), nil
+		return newPriorityQueueStrategy(conf, tasks), nil
 
 	case SchedulingMPMC:
 		return newMPMCStrategy(conf, conf.mpmcBounded, conf.mpmcCapacity), nil

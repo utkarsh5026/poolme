@@ -139,6 +139,11 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 	return results, err
 }
 
+// collect receives results from a channel and invokes a callback for each result.
+// It collects exactly n results and returns the first error encountered, if any.
+//
+// The function continues collecting all n results even after encountering an error,
+// ensuring proper cleanup and allowing the callback to process all results.
 func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Result[R, int64])) error {
 	var firstErr error
 	for range n {
@@ -157,6 +162,11 @@ func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Re
 	return firstErr
 }
 
+// startWorkers spawns the specified number of worker goroutines and manages their lifecycle.
+//
+// Each worker pulls tasks from the scheduling strategy and processes them using the provided
+// process function and result handler. The function automatically closes the result channel
+// once all workers have completed.
 func startWorkers[T, R any](ctx context.Context, workers int, strategy schedulingStrategy[T, R], f ProcessFunc[T, R], h resultHandler[T, R], resChan chan *Result[R, int64]) {
 	var wg sync.WaitGroup
 	wg.Add(workers)
@@ -173,6 +183,10 @@ func startWorkers[T, R any](ctx context.Context, workers int, strategy schedulin
 	}()
 }
 
+// runScheduler orchestrates the complete task processing workflow using a scheduling strategy.
+//
+// This function creates the scheduling strategy, submits all tasks, starts workers, and collects
+// results. It automatically handles strategy cleanup and error propagation.
 func runScheduler[T, R any](ctx context.Context, workerCount int, conf *processorConfig[T, R], tasks []*submittedTask[T, R], p ProcessFunc[T, R], onResult func(r *Result[R, int64])) error {
 	s, err := createSchedulingStrategy(conf, nil)
 	if err != nil {
