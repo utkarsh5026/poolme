@@ -104,7 +104,7 @@ func (wp *Scheduler[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, R
 	}
 
 	go func() {
-		g.Wait()
+		_ = g.Wait()
 		close(state.done)
 	}()
 
