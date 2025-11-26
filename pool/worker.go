@@ -16,40 +16,6 @@ func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], con
 	return err
 }
 
-// worker is the core worker function that processes tasks from the task channel.
-// It includes panic recovery to prevent a single task from crashing the entire pool.
-// This function is generic over the key type K to support different task types.
-func worker[T any, R any, K comparable](
-	ctx context.Context,
-	conf *processorConfig[T, R],
-	taskChan <-chan task[T, K],
-	resultChan chan<- Result[R, K],
-	processFn ProcessFunc[T, R],
-) error {
-	for {
-		select {
-		case t, ok := <-taskChan:
-			if !ok {
-				return nil
-			}
-
-			actualTask := t.Task()
-			result, err := executeTask(ctx, conf, actualTask, processFn)
-
-			select {
-			case resultChan <- Result[R, K]{Value: result, Error: err, Key: t.Key()}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			if err != nil && !conf.continueOnErr {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-}
-
 // executeTask encapsulates the common logic for executing a task with hooks, rate limiting, and processing.
 // This function is used by both worker and runSubmitWorker to avoid code duplication.
 // It handles rate limiting, hook execution (beforeTaskStart and onTaskEnd), and task processing with retry.
