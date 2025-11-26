@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"time"
+
+	"github.com/utkarsh5026/poolme/internal/algorithms"
 )
 
 var (
@@ -107,18 +110,6 @@ func waitUntil(d <-chan struct{}, timeout time.Duration) error {
 	}
 }
 
-// executeSubmitted executes a submitted task and sends the result to its associated future.
-// This function is called by workers to process tasks that were submitted via SubmitWithFuture.
-// It wraps the task execution logic and ensures the result is properly delivered to the waiting future.
-func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], pool *WorkerPool[T, R], executor ProcessFunc[T, R]) {
-	result, err := executeTask(ctx, pool, s.task, executor)
-	s.future.result <- Result[R, int64]{
-		Value: result,
-		Error: err,
-		Key:   s.id,
-	}
-}
-
 // nextPowerOfTwo returns the next power of 2 >= n
 func nextPowerOfTwo(n int) int {
 	if n <= 0 {
@@ -134,4 +125,107 @@ func nextPowerOfTwo(n int) int {
 		power *= 2
 	}
 	return power
+}
+
+func createSchedulingStrategy[T, R any](conf *processorConfig[T, R], tasks []*submittedTask[T, R]) (schedulingStrategy[T, R], error) {
+	strategyType := conf.schedulingStrategy
+
+	if conf.usePq {
+		strategyType = SchedulingPriorityQueue
+	}
+
+	switch strategyType {
+	case SchedulingWorkStealing:
+		return newWorkStealingStrategy[T, R](256, conf), nil
+
+	case SchedulingPriorityQueue:
+		if conf.pqFunc == nil {
+			return nil, errors.New("priority queue enabled but no priority function provided")
+		}
+		conf.pqFunc = func(task T) int {
+			return conf.pqFunc(task)
+		}
+		return newPriorityQueueStrategy[T, R](conf, tasks), nil
+
+	case SchedulingMPMC:
+		return newMPMCStrategy[T, R](conf.mpmcBounded, conf.mpmcCapacity), nil
+
+	case SchedulingChannel:
+		fallthrough
+	default:
+		return newChannelStrategy[T, R](conf), nil
+	}
+}
+
+func createConfig[T, R any](opts ...WorkerPoolOption) *processorConfig[T, R] {
+	cfg := &workerPoolConfig{
+		workerCount:         runtime.GOMAXPROCS(0),
+		taskBuffer:          0, // Will be set to workerCount if not specified
+		maxAttempts:         1,
+		initialDelay:        0,
+		backoffType:         BackoffExponential, // Default backoff
+		backoffInitialDelay: 100 * time.Millisecond,
+		backoffMaxDelay:     5 * time.Second,
+		backoffJitterFactor: 0.1, // Default 10% jitter for jittered backoff
+	}
+
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if cfg.taskBuffer == 0 {
+		cfg.taskBuffer = cfg.workerCount
+	}
+
+	if cfg.retryPolicySet {
+		cfg.backoffInitialDelay = cfg.initialDelay
+	}
+
+	backoffStrategy := algorithms.NewBackoffStrategy(
+		cfg.backoffType,
+		cfg.backoffInitialDelay,
+		cfg.backoffMaxDelay,
+		cfg.backoffJitterFactor,
+	)
+
+	var zeroT T
+	var zeroR R
+	expectedTaskType := fmt.Sprintf("%T", zeroT)
+	expectedResultType := fmt.Sprintf("%T", zeroR)
+
+	beforeTaskStart, onTaskEnd, onRetry := checkfuncs[T, R](cfg, expectedTaskType, expectedResultType)
+
+	return &processorConfig[T, R]{
+		workerCount:        cfg.workerCount,
+		taskBuffer:         cfg.taskBuffer,
+		maxAttempts:        cfg.maxAttempts,
+		initialDelay:       cfg.initialDelay,
+		rateLimiter:        cfg.rateLimiter,
+		beforeTaskStart:    beforeTaskStart,
+		onTaskEnd:          onTaskEnd,
+		onRetry:            onRetry,
+		continueOnErr:      cfg.continueOnError,
+		backoffStrategy:    backoffStrategy,
+		schedulingStrategy: cfg.schedulingStrategy,
+		usePq:              cfg.usePq,
+		// The type of cfg.pqFunc is func(a any) int, but processorConfig expects func(a T) int
+		// Provide an adapter if pqFunc is non-nil
+		pqFunc: func() func(a T) int {
+			if cfg.pqFunc == nil {
+				return nil
+			}
+			return func(a T) int {
+				return cfg.pqFunc(any(a))
+			}
+		}(),
+		mpmcBounded:  cfg.mpmcBounded,
+		mpmcCapacity: cfg.mpmcCapacity,
+	}
+}
+
+func executeSafely[T, R any](ctx context.Context, t *submittedTask[T, R], conf *processorConfig[T, R], executor ProcessFunc[T, R]) error {
+	if err := executeSubmitted(ctx, t, conf, executor); err != nil && !conf.continueOnErr {
+		return err
+	}
+	return nil
 }
