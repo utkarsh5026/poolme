@@ -3,21 +3,45 @@ package pool
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
+// handleExecutionError handles errors from executeSubmitted with standardized logic.
+// Returns the error if the worker should stop, or nil if it should continue.
+// Calls drainFunc before returning for context errors.
+func handleExecutionError(err error, continueOnErr bool, drainFunc func()) error {
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		drainFunc()
+		return err
+	}
+
+	if !continueOnErr {
+		return err
+	}
+
+	return nil
+}
+
 type channelStrategy[T any, R any] struct {
 	config   *processorConfig[T, R]
 	taskChan chan *submittedTask[T, R]
+	quit     chan struct{}
+	wg       sync.WaitGroup
 }
 
 func newChannelStrategy[T any, R any](conf *processorConfig[T, R]) *channelStrategy[T, R] {
 	return &channelStrategy[T, R]{
 		config:   conf,
 		taskChan: make(chan *submittedTask[T, R], conf.taskBuffer),
+		quit:     make(chan struct{}),
 	}
 }
 
@@ -26,7 +50,24 @@ func (s *channelStrategy[T, R]) Submit(task *submittedTask[T, R]) error {
 	return nil
 }
 
+func (s *channelStrategy[T, R]) SubmitBatch(tasks []*submittedTask[T, R]) (int, error) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		for _, task := range tasks {
+			select {
+			case s.taskChan <- task:
+			case <-s.quit:
+				return
+			}
+		}
+	}()
+	return len(tasks), nil
+}
+
 func (s *channelStrategy[T, R]) Shutdown() {
+	close(s.quit) // Signal all SubmitBatch goroutines to stop
+	s.wg.Wait()   // Wait for all SubmitBatch goroutines to finish
 	close(s.taskChan)
 }
 
@@ -34,14 +75,34 @@ func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			s.drain(ctx, executor, h)
+			return ctx.Err()
 		case t, ok := <-s.taskChan:
 			if !ok {
 				return nil
 			}
-			if err := executeSubmitted(ctx, t, s.config, executor, h); err != nil && !s.config.continueOnErr {
+			err := executeSubmitted(ctx, t, s.config, executor, h)
+			if err := handleExecutionError(err, s.config.continueOnErr, func() {
+				s.drain(ctx, executor, h)
+			}); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+// drain processes any remaining tasks in the channel during context cancellation.
+// This ensures all submitted tasks are processed even when context is cancelled.
+func (s *channelStrategy[T, R]) drain(ctx context.Context, executor ProcessFunc[T, R], h resultHandler[T, R]) {
+	for {
+		select {
+		case t, ok := <-s.taskChan:
+			if !ok {
+				return
+			}
+			_ = executeSubmitted(ctx, t, s.config, executor, h)
+		default:
+			return
 		}
 	}
 }
@@ -70,6 +131,16 @@ func (s *mpmc[T, R]) Submit(task *submittedTask[T, R]) error {
 	return s.queue.Enqueue(s.quit, task)
 }
 
+// SubmitBatch enqueues multiple tasks in batch for better performance
+func (s *mpmc[T, R]) SubmitBatch(tasks []*submittedTask[T, R]) (int, error) {
+	for i, task := range tasks {
+		if err := s.queue.Enqueue(s.quit, task); err != nil {
+			return i, err
+		}
+	}
+	return len(tasks), nil
+}
+
 // worker is the main worker loop that dequeues and executes tasks
 func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], h resultHandler[T, R]) error {
 	quitCtx, cancel := context.WithCancel(ctx)
@@ -93,12 +164,15 @@ func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor Proces
 			}
 			if ctx.Err() != nil {
 				s.drainQueue(ctx, executor, h)
-				return nil
+				return ctx.Err()
 			}
 			continue
 		}
 
-		if err := executeSubmitted(ctx, task, s.conf, executor, h); err != nil && !s.conf.continueOnErr {
+		err = executeSubmitted(ctx, task, s.conf, executor, h)
+		if err := handleExecutionError(err, s.conf.continueOnErr, func() {
+			s.drainQueue(ctx, executor, h)
+		}); err != nil {
 			return err
 		}
 	}
@@ -111,7 +185,7 @@ func (s *mpmc[T, R]) drainQueue(ctx context.Context, executor ProcessFunc[T, R],
 		if !ok {
 			return
 		}
-		executeSubmitted(ctx, task, s.conf, executor, h)
+		_ = executeSubmitted(ctx, task, s.conf, executor, h)
 	}
 }
 
@@ -153,6 +227,24 @@ func (s *priorityQueueStrategy[T, R]) Submit(task *submittedTask[T, R]) error {
 	return nil
 }
 
+// SubmitBatch adds multiple tasks to the priority queue efficiently.
+// Builds the heap in O(n) time rather than O(n log n) for individual inserts.
+func (s *priorityQueueStrategy[T, R]) SubmitBatch(tasks []*submittedTask[T, R]) (int, error) {
+	s.mu.Lock()
+	s.pq.queue = append(s.pq.queue, tasks...)
+
+	heap.Init(s.pq)
+	s.mu.Unlock()
+
+	for range tasks {
+		select {
+		case s.availableChan <- struct{}{}:
+		default:
+		}
+	}
+	return len(tasks), nil
+}
+
 // Worker is the main loop for worker goroutines using priority queue scheduling.
 // Workers wait for task signals and then batch-process all available tasks in priority order.
 func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], h resultHandler[T, R]) error {
@@ -160,7 +252,7 @@ func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64
 		select {
 		case <-ctx.Done():
 			s.drain(ctx, executor, h)
-			return nil
+			return ctx.Err()
 
 		case _, ok := <-s.availableChan:
 			if !ok {
@@ -178,7 +270,10 @@ func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64
 				if !ok {
 					panic("priorityQueueStrategy.Worker: invalid type assertion")
 				}
-				if err := executeSubmitted(ctx, task, s.conf, executor, h); err != nil {
+				err := executeSubmitted(ctx, task, s.conf, executor, h)
+				if err := handleExecutionError(err, s.conf.continueOnErr, func() {
+					s.drain(ctx, executor, h)
+				}); err != nil {
 					return err
 				}
 			}
@@ -211,7 +306,7 @@ func (s *priorityQueueStrategy[T, R]) drain(ctx context.Context, executor Proces
 		if !ok {
 			panic("priorityQueueStrategy.drain: invalid type assertion")
 		}
-		executeSubmitted(ctx, task, s.conf, executor, h)
+		_ = executeSubmitted(ctx, task, s.conf, executor, h)
 	}
 }
 
@@ -268,6 +363,38 @@ func (s *workSteal[T, R]) Submit(task *submittedTask[T, R]) error {
 	return nil
 }
 
+// SubmitBatch pre-distributes tasks across worker queues for optimal load balancing.
+// This eliminates per-task submission overhead and gives workers balanced starting queues.
+func (s *workSteal[T, R]) SubmitBatch(tasks []*submittedTask[T, R]) (int, error) {
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+
+	tasksPerWorker := len(tasks) / s.workerCount
+	remainder := len(tasks) % s.workerCount
+
+	taskIndex := 0
+
+	// Distribute tasks evenly across worker queues
+	for workerID := 0; workerID < s.workerCount && taskIndex < len(tasks); workerID++ {
+		localQueue := s.workerQueues[workerID]
+
+		// Give this worker its share of tasks (plus one extra if there's remainder)
+		tasksForThisWorker := tasksPerWorker
+		if workerID < remainder {
+			tasksForThisWorker++
+		}
+
+		// Add tasks to this worker's local queue
+		for i := 0; i < tasksForThisWorker && taskIndex < len(tasks); i++ {
+			localQueue.PushBack(tasks[taskIndex])
+			taskIndex++
+		}
+	}
+
+	return taskIndex, nil
+}
+
 // worker is the main loop for each worker goroutine.
 // It follows the work-stealing algorithm: local work -> global batch -> steal -> backoff
 func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor ProcessFunc[T, R], h resultHandler[T, R]) error {
@@ -278,6 +405,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 		if globalCounter%10 == 0 {
 			select {
 			case <-ctx.Done():
+				s.drain(ctx, localQueue, executor, h)
 				return ctx.Err()
 			case <-s.quit:
 				s.drain(ctx, localQueue, executor, h)
@@ -289,7 +417,10 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 
 		for range fastCheckCounter {
 			if t := localQueue.PopBack(); t != nil {
-				if err := executeSubmitted(ctx, t, s.conf, executor, h); err != nil {
+				err := executeSubmitted(ctx, t, s.conf, executor, h)
+				if err := handleExecutionError(err, s.conf.continueOnErr, func() {
+					s.drain(ctx, localQueue, executor, h)
+				}); err != nil {
 					return err
 				}
 				missCount = 0
@@ -298,7 +429,10 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 
 		if s.globalQueue.Len() > 0 {
 			if t := s.globalQueue.PopFront(); t != nil {
-				if err := executeSubmitted(ctx, t, s.conf, executor, h); err != nil {
+				err := executeSubmitted(ctx, t, s.conf, executor, h)
+				if err := handleExecutionError(err, s.conf.continueOnErr, func() {
+					s.drain(ctx, localQueue, executor, h)
+				}); err != nil {
 					return err
 				}
 				missCount = 0
@@ -314,7 +448,10 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor P
 		}
 
 		if t := s.steal(int(workerID)); t != nil {
-			if err := executeSubmitted(ctx, t, s.conf, executor, h); err != nil {
+			err := executeSubmitted(ctx, t, s.conf, executor, h)
+			if err := handleExecutionError(err, s.conf.continueOnErr, func() {
+				s.drain(ctx, localQueue, executor, h)
+			}); err != nil {
 				return err
 			}
 			missCount = 0
@@ -428,7 +565,7 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 			if task == nil {
 				break
 			}
-			executeSubmitted(ctx, task, s.conf, executor, h)
+			_ = executeSubmitted(ctx, task, s.conf, executor, h)
 		}
 	}()
 
@@ -439,7 +576,7 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 			if task == nil {
 				break
 			}
-			executeSubmitted(ctx, task, s.conf, executor, h)
+			_ = executeSubmitted(ctx, task, s.conf, executor, h)
 		}
 	}()
 
