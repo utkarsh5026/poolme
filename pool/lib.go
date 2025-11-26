@@ -10,12 +10,33 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// Scheduler represents a long-running, reusable worker pool that can be started and then
+// accept asynchronous task submissions. It maintains worker goroutines, schedules work, and tracks state
+// for lifecycle management and safe concurrent usage.
+//
+// Type parameters:
+//   - T: The input task type processed by workers
+//   - R: The output/result type produced by processing tasks
 type Scheduler[T, R any] struct {
 	config *processorConfig[T, R]
 	mu     sync.RWMutex
 	state  *poolState[T, R]
 }
 
+// NewScheduler creates a new Scheduler instance with the specified configuration options.
+// This does NOT start any workers immediately; use Start to begin processing tasks.
+//
+// Parameters:
+//   - opts: Variadic set of WorkerPoolOption for customizing worker count, task buffer, etc.
+//
+// Returns:
+//   - *Scheduler: An unstarted persistent pool (call Start to launch).
+//
+// Example:
+//
+//	sched := NewScheduler[int, string](WithWorkerCount(8), WithTaskBuffer(32))
+//	_ = sched.Start(ctx, processFunc)
+//	future := sched.Submit(5)
 func NewScheduler[T, R any](opts ...WorkerPoolOption) *Scheduler[T, R] {
 	cfg := createConfig[T, R](opts...)
 	return &Scheduler[T, R]{
@@ -25,23 +46,6 @@ func NewScheduler[T, R any](opts ...WorkerPoolOption) *Scheduler[T, R] {
 
 // Start initializes the worker pool in long-running mode and starts persistent workers.
 // This enables the pool to accept tasks via the Submit method for asynchronous processing.
-//
-// Long-running mode is suitable for:
-//   - Server applications that need to process tasks continuously
-//   - Scenarios where tasks arrive asynchronously over time
-//   - Applications requiring fine-grained control over individual task submission
-//   - Cases where you need futures/promises for tracking individual task results
-//
-// The pool will spawn workerCount goroutines that will continuously process tasks
-// until Shutdown is called. The provided processFn will be used to process all
-// tasks submitted via the Submit method.
-//
-// Behavior:
-//   - Creates workerCount persistent worker goroutines
-//   - Workers remain active until Shutdown is called
-//   - All submitted tasks use the same processFn
-//   - The context is used for the lifetime of the pool and task processing
-//   - Context cancellation will interrupt all workers and in-flight tasks
 //
 // Parameters:
 //   - ctx: Context for the pool's lifetime and task processing
@@ -109,22 +113,6 @@ func (wp *Scheduler[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, R
 
 // Submit submits a single task to the pool for asynchronous processing.
 // It returns a Future that can be used to retrieve the result when the task completes.
-//
-// This method is only available after calling Start to initialize the pool in long-running mode.
-// Tasks are queued in a buffered channel (size configured via WithTaskBuffer) and processed
-// by available workers using the processFn provided to Start.
-//
-// The returned Future provides methods to:
-//   - Get(): Block and wait for the result
-//   - GetWithTimeout(): Wait for the result with a timeout
-//   - IsReady(): Check if the result is available without blocking
-//
-// Behavior:
-//   - Tasks are assigned a unique monotonically increasing ID
-//   - Tasks are processed in the order they're received by workers
-//   - If the task buffer is full, Submit blocks until space is available
-//   - Returns error immediately if pool is not started or has been shut down
-//   - Context cancellation (from Start) will interrupt task submission
 //
 // Parameters:
 //   - task: The task to process
@@ -235,17 +223,11 @@ type poolState[T any, R any] struct {
 // It provides concurrent task processing with configurable worker count,
 // context support, and proper error handling.
 //
-// The pool supports two modes of operation:
-// 1. Batch mode: Use Process/ProcessMap/ProcessStream for processing collections
-// 2. Long-running mode: Use Start/Submit/Shutdown for persistent worker pool
-//
 // Type parameters:
 //   - T: The input task type
 //   - R: The result type
 type WorkerPool[T any, R any] struct {
-	conf  *processorConfig[T, R]
-	mu    sync.RWMutex
-	state *poolState[T, R]
+	conf *processorConfig[T, R]
 }
 
 // NewWorkerPool creates a new worker pool with the given options.
@@ -279,16 +261,6 @@ func NewWorkerPool[T any, R any](opts ...WorkerPoolOption) *WorkerPool[T, R] {
 // Process executes a batch of tasks concurrently using a pool of workers.
 // It processes all tasks in the slice and returns when all tasks are complete or an error occurs.
 //
-// This method uses batch mode processing and is suitable for processing a known set of tasks.
-// The pool will use min(workerCount, len(tasks)) workers to process the tasks concurrently.
-//
-// Behavior:
-//   - Tasks are distributed across available workers
-//   - Results maintain the same order as input tasks
-//   - If continueOnError is false (default), processing stops on first error
-//   - If continueOnError is true, all tasks are processed despite errors
-//   - Context cancellation will interrupt processing
-//
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
 //   - tasks: Slice of tasks to process
@@ -315,18 +287,6 @@ func (wp *WorkerPool[T, R]) Process(
 
 // ProcessMap executes a batch of tasks from a map concurrently using a pool of workers.
 // It processes all map entries and returns a map of results with the same keys.
-//
-// This method is similar to Process but works with map inputs, making it suitable
-// for scenarios where tasks have string identifiers or natural key-value relationships.
-// The pool will use min(workerCount, len(tasks)) workers to process the tasks concurrently.
-//
-// Behavior:
-//   - Tasks are distributed across available workers
-//   - Results map contains the same keys as the input tasks map
-//   - Processing order is non-deterministic (map iteration order)
-//   - If continueOnError is false (default), processing stops on first error
-//   - If continueOnError is true, all tasks are processed despite errors
-//   - Context cancellation will interrupt processing
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -355,22 +315,6 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 
 // ProcessStream processes tasks from an input channel concurrently using a pool of workers.
 // It returns channels for receiving results and errors, enabling streaming/pipeline processing.
-//
-// This method is ideal for scenarios where:
-//   - Tasks arrive dynamically or are generated on-the-fly
-//   - You want to process tasks as they arrive without collecting them first
-//   - Memory constraints prevent loading all tasks at once
-//   - You need to build processing pipelines
-//
-// The pool will use workerCount workers to process tasks concurrently.
-//
-// Behavior:
-//   - Workers consume tasks from taskChan as they arrive
-//   - Results are sent to the result channel as tasks complete (order not preserved)
-//   - The caller MUST close the taskChan when no more tasks will be sent
-//   - The result channel is automatically closed when all tasks are processed
-//   - If an error occurs, it's sent to the error channel
-//   - Context cancellation will interrupt processing and close channels
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
