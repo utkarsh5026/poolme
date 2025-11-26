@@ -411,7 +411,7 @@ func BenchmarkStrategy_MemoryAllocations(b *testing.B) {
 func BenchmarkStrategy_LatencyDistribution(b *testing.B) {
 	workers := 8
 	taskCount := 5000
-	processFunc := cpuBoundWork(1000)
+	processFunc := cpuBoundWork(10000)
 
 	strategies := []struct {
 		name string
@@ -442,45 +442,45 @@ func BenchmarkStrategy_LatencyDistribution(b *testing.B) {
 
 	for _, strategy := range strategies {
 		b.Run(strategy.name, func(b *testing.B) {
-			var latencies []time.Duration
-			var mu sync.Mutex
-
-			processWithLatency := func(ctx context.Context, task int) (int, error) {
-				start := time.Now()
-				result, err := processFunc(ctx, task)
-				elapsed := time.Since(start)
-
-				mu.Lock()
-				latencies = append(latencies, elapsed)
-				mu.Unlock()
-
-				return result, err
-			}
-
 			tasks := make([]int, taskCount)
 			for j := range tasks {
 				tasks[j] = j
 			}
 
 			b.ResetTimer()
-			wp := pool.NewWorkerPool[int, int](strategy.opts...)
-			_, err := wp.Process(context.Background(), tasks, processWithLatency)
-			if err != nil {
-				b.Fatal(err)
-			}
-			b.StopTimer()
+			for i := 0; b.Loop(); i++ {
+				var latencies []time.Duration
+				var mu sync.Mutex
 
-			// Calculate and report percentiles
-			if len(latencies) > 0 {
-				p50 := percentile(latencies, 0.50)
-				p95 := percentile(latencies, 0.95)
-				p99 := percentile(latencies, 0.99)
-				pMax := percentile(latencies, 1.0)
+				processWithLatency := func(ctx context.Context, task int) (int, error) {
+					start := time.Now()
+					result, err := processFunc(ctx, task)
+					elapsed := time.Since(start)
 
-				b.ReportMetric(float64(p50.Nanoseconds()), "p50_ns")
-				b.ReportMetric(float64(p95.Nanoseconds()), "p95_ns")
-				b.ReportMetric(float64(p99.Nanoseconds()), "p99_ns")
-				b.ReportMetric(float64(pMax.Nanoseconds()), "max_ns")
+					mu.Lock()
+					latencies = append(latencies, elapsed)
+					mu.Unlock()
+
+					return result, err
+				}
+
+				wp := pool.NewWorkerPool[int, int](strategy.opts...)
+				_, err := wp.Process(context.Background(), tasks, processWithLatency)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				if i == b.N-1 && len(latencies) > 0 {
+					p50 := percentile(latencies, 0.50)
+					p95 := percentile(latencies, 0.95)
+					p99 := percentile(latencies, 0.99)
+					pMax := percentile(latencies, 1.0)
+
+					b.ReportMetric(float64(p50.Nanoseconds()), "p50_ns")
+					b.ReportMetric(float64(p95.Nanoseconds()), "p95_ns")
+					b.ReportMetric(float64(p99.Nanoseconds()), "p99_ns")
+					b.ReportMetric(float64(pMax.Nanoseconds()), "max_ns")
+				}
 			}
 		})
 	}
@@ -539,9 +539,10 @@ func BenchmarkStrategy_ConcurrentSubmission(b *testing.B) {
 						// Split tasks among submitters
 						tasksPerSubmitter := taskCount / numSubmitters
 						var wg sync.WaitGroup
+						var errOnce sync.Once
+						var firstErr error
 						wg.Add(numSubmitters)
 
-						start := time.Now()
 						for s := 0; s < numSubmitters; s++ {
 							startIdx := s * tasksPerSubmitter
 							endIdx := startIdx + tasksPerSubmitter
@@ -552,15 +553,26 @@ func BenchmarkStrategy_ConcurrentSubmission(b *testing.B) {
 							go func(start, end int) {
 								defer wg.Done()
 								subTasks := tasks[start:end]
-								wp.Process(context.Background(), subTasks, processFunc)
+								_, err := wp.Process(context.Background(), subTasks, processFunc)
+								if err != nil {
+									errOnce.Do(func() {
+										firstErr = err
+									})
+								}
 							}(startIdx, endIdx)
 						}
 
 						wg.Wait()
-						elapsed := time.Since(start)
-
-						b.ReportMetric(float64(elapsed.Nanoseconds())/float64(taskCount), "ns/task")
+						if firstErr != nil {
+							b.Fatal(firstErr)
+						}
 					}
+					b.StopTimer()
+
+					// Report custom metric for ns/task
+					nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+					nsPerTask := nsPerOp / float64(taskCount)
+					b.ReportMetric(nsPerTask, "ns/task")
 				})
 			}
 		})
@@ -893,7 +905,7 @@ func BenchmarkStrategy_CacheLocality(b *testing.B) {
 func BenchmarkStrategy_TailLatency(b *testing.B) {
 	workers := 8
 	taskCount := 10000
-	processFunc := cpuBoundWork(1000)
+	processFunc := cpuBoundWork(10000) // Increased from 1000 to make latencies measurable
 
 	strategies := []struct {
 		name string
@@ -924,42 +936,44 @@ func BenchmarkStrategy_TailLatency(b *testing.B) {
 
 	for _, strategy := range strategies {
 		b.Run(strategy.name, func(b *testing.B) {
-			var latencies []time.Duration
-			var mu sync.Mutex
-
-			processWithLatency := func(ctx context.Context, task int) (int, error) {
-				start := time.Now()
-				result, err := processFunc(ctx, task)
-				elapsed := time.Since(start)
-
-				mu.Lock()
-				latencies = append(latencies, elapsed)
-				mu.Unlock()
-
-				return result, err
-			}
-
 			tasks := make([]int, taskCount)
 			for j := range tasks {
 				tasks[j] = j
 			}
 
 			b.ResetTimer()
-			wp := pool.NewWorkerPool[int, int](strategy.opts...)
-			_, err := wp.Process(context.Background(), tasks, processWithLatency)
-			if err != nil {
-				b.Fatal(err)
-			}
-			b.StopTimer()
+			for i := 0; i < b.N; i++ {
+				var latencies []time.Duration
+				var mu sync.Mutex
 
-			if len(latencies) > 0 {
-				p99 := percentile(latencies, 0.99)
-				p999 := percentile(latencies, 0.999)
-				pMax := percentile(latencies, 1.0)
+				processWithLatency := func(ctx context.Context, task int) (int, error) {
+					start := time.Now()
+					result, err := processFunc(ctx, task)
+					elapsed := time.Since(start)
 
-				b.ReportMetric(float64(p99.Nanoseconds()), "p99_ns")
-				b.ReportMetric(float64(p999.Nanoseconds()), "p999_ns")
-				b.ReportMetric(float64(pMax.Nanoseconds()), "max_ns")
+					mu.Lock()
+					latencies = append(latencies, elapsed)
+					mu.Unlock()
+
+					return result, err
+				}
+
+				wp := pool.NewWorkerPool[int, int](strategy.opts...)
+				_, err := wp.Process(context.Background(), tasks, processWithLatency)
+				if err != nil {
+					b.Fatal(err)
+				}
+
+				// Calculate and report percentiles (only on last iteration)
+				if i == b.N-1 && len(latencies) > 0 {
+					p99 := percentile(latencies, 0.99)
+					p999 := percentile(latencies, 0.999)
+					pMax := percentile(latencies, 1.0)
+
+					b.ReportMetric(float64(p99.Nanoseconds()), "p99_ns")
+					b.ReportMetric(float64(p999.Nanoseconds()), "p999_ns")
+					b.ReportMetric(float64(pMax.Nanoseconds()), "max_ns")
+				}
 			}
 		})
 	}
