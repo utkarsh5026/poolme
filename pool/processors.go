@@ -152,19 +152,8 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 		return map[string]R{}, nil
 	}
 
-	strategy, err := createSchedulingStrategy(m.pool.conf, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer strategy.Shutdown()
-
-	resChan := make(chan *Result[R, int64], len(m.tasks))
 	keyMap := make(map[int64]string, len(m.tasks))
 	results := make(map[string]R, len(m.tasks))
-
-	handler := func(task *submittedTask[T, R], result *Result[R, int64]) {
-		resChan <- result
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -182,26 +171,7 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 		taskID++
 	}
 
-	submittedCount, err := strategy.SubmitBatch(submittedTasks)
-	if err != nil {
-		return nil, err
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(workerCount)
-	for i := range workerCount {
-		go func(workerID int) {
-			defer wg.Done()
-			_ = strategy.Worker(ctx, int64(workerID), m.processFn, handler)
-		}(i)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resChan)
-	}()
-
-	err = collect(submittedCount, resChan, func(r *Result[R, int64]) {
+	err := runScheduler(ctx, workerCount, m.pool.conf, submittedTasks, m.processFn, func(r *Result[R, int64]) {
 		if stringKey, ok := keyMap[r.Key]; ok {
 			results[stringKey] = r.Value
 		}
@@ -225,4 +195,41 @@ func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Re
 	}
 
 	return firstErr
+}
+
+func startWorkers[T, R any](ctx context.Context, workers int, strategy schedulingStrategy[T, R], f ProcessFunc[T, R], h resultHandler[T, R], resChan chan *Result[R, int64]) {
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := range workers {
+		go func(workerID int) {
+			defer wg.Done()
+			_ = strategy.Worker(ctx, int64(workerID), f, h)
+		}(i)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resChan)
+	}()
+}
+
+func runScheduler[T, R any](ctx context.Context, workerCount int, conf *processorConfig[T, R], tasks []*submittedTask[T, R], p ProcessFunc[T, R], onResult func(r *Result[R, int64])) error {
+	s, err := createSchedulingStrategy(conf, nil)
+	if err != nil {
+		return err
+	}
+	defer s.Shutdown()
+
+	resChan := make(chan *Result[R, int64], len(tasks))
+	handler := func(task *submittedTask[T, R], result *Result[R, int64]) {
+		resChan <- result
+	}
+
+	submittedCount, err := s.SubmitBatch(tasks)
+	if err != nil {
+		return err
+	}
+
+	startWorkers(ctx, workerCount, s, p, handler, resChan)
+	return collect(submittedCount, resChan, onResult)
 }
