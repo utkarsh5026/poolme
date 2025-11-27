@@ -80,10 +80,11 @@ func main() {
 	fmt.Printf("💡 Note: Each job sleeps to simulate real work. This is intentional!\n\n")
 
 	// Create scheduler with priority queue
+	// Lower priority values have higher priority (1=Urgent, 5=Low)
 	scheduler := pool.NewScheduler[Job, string](
 		pool.WithWorkerCount(workerCount),
-		pool.WithPriorityQueue(func(job Job) int {
-			return job.Priority
+		pool.WithPriorityQueue(func(a, b Job) bool {
+			return a.Priority < b.Priority
 		}),
 	)
 

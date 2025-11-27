@@ -46,11 +46,8 @@ func getAllStrategies(workerCount int) []strategyConfig {
 			name: "PriorityQueue",
 			opts: []WorkerPoolOption{
 				WithWorkerCount(workerCount),
-				WithPriorityQueue(func(task any) int {
-					if t, ok := task.(int); ok {
-						return t
-					}
-					return 0
+				WithPriorityQueue(func(a, b int) bool {
+					return a < b
 				}),
 			},
 		},
@@ -531,11 +528,8 @@ func TestWorkerPool_Process_HighConcurrency(t *testing.T) {
 			name: "PriorityQueue",
 			opts: []WorkerPoolOption{
 				WithWorkerCount(workerCount),
-				WithPriorityQueue(func(task any) int {
-					if t, ok := task.(int); ok {
-						return t
-					}
-					return 0
+				WithPriorityQueue(func(a, b int) bool {
+					return a < b
 				}),
 			},
 		},

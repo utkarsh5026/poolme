@@ -795,9 +795,10 @@ func BenchmarkStrategy_PriorityQueue(b *testing.B) {
 	taskCount := 10000
 	processFunc := cpuBoundWork(500)
 
-	// Priority function: higher values = higher priority
-	priorityFunc := func(task int) int {
-		return taskCount - task // Reverse order for priority
+	// Priority function: lower task values have higher priority
+	// (task 0 should be processed before task 9999)
+	lessFunc := func(a, b int) bool {
+		return a < b // Lower values have higher priority
 	}
 
 	strategies := []struct {
@@ -815,7 +816,7 @@ func BenchmarkStrategy_PriorityQueue(b *testing.B) {
 			name: "PriorityQueue",
 			opts: []pool.WorkerPoolOption{
 				pool.WithWorkerCount(workers),
-				pool.WithPriorityQueue(priorityFunc),
+				pool.WithPriorityQueue(lessFunc),
 			},
 		},
 	}

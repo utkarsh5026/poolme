@@ -164,14 +164,14 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *scheduler.ProcessorConfig
 		BackoffStrategy:    backoffStrategy,
 		SchedulingStrategy: cfg.schedulingStrategy,
 		UsePq:              cfg.usePq,
-		// The type of cfg.pqFunc is func(a any) int, but processorConfig expects func(a T) int
-		// Provide an adapter if pqFunc is non-nil
-		PqFunc: func() func(a T) int {
-			if cfg.pqFunc == nil {
+		// The type of cfg.lessFunc is func(a, b any) bool, but processorConfig expects func(a, b T) bool
+		// Provide an adapter if lessFunc is non-nil
+		LessFunc: func() func(a, b T) bool {
+			if cfg.lessFunc == nil {
 				return nil
 			}
-			return func(a T) int {
-				return cfg.pqFunc(any(a))
+			return func(a, b T) bool {
+				return cfg.lessFunc(any(a), any(b))
 			}
 		}(),
 		MpmcBounded:  cfg.mpmcBounded,

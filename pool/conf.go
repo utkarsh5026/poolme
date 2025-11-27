@@ -80,8 +80,8 @@ type workerPoolConfig struct {
 
 	schedulingStrategy scheduler.SchedulingStrategyType
 
-	usePq  bool
-	pqFunc func(a any) int
+	usePq    bool
+	lessFunc func(a, b any) bool
 
 	// MPMC queue configuration
 	mpmcBounded  bool
@@ -329,15 +329,38 @@ func WithDecorrelatedJitter(initialDelay, maxDelay time.Duration) WorkerPoolOpti
 	}
 }
 
-func WithPriorityQueue[T any](checkPrior func(a T) int) WorkerPoolOption {
+// WithPriorityQueue configures the pool to use a priority queue with a custom comparison function.
+// The lessFunc should return true if task 'a' has higher priority than task 'b'.
+// This allows flexible priority ordering based on any task properties.
+//
+// Example (lower values have higher priority):
+//
+//	type Task struct { Priority int }
+//	pool := NewWorkerPool[Task, string](
+//	    WithPriorityQueue(func(a, b Task) bool {
+//	        return a.Priority < b.Priority
+//	    }),
+//	)
+//
+// Example (earlier deadlines have higher priority):
+//
+//	type Task struct { Deadline time.Time }
+//	pool := NewWorkerPool[Task, string](
+//	    WithPriorityQueue(func(a, b Task) bool {
+//	        return a.Deadline.Before(b.Deadline)
+//	    }),
+//	)
+func WithPriorityQueue[T any](lessFunc func(a, b T) bool) WorkerPoolOption {
 	return func(cfg *workerPoolConfig) {
 		cfg.usePq = true
 		cfg.schedulingStrategy = scheduler.SchedulingPriorityQueue
-		cfg.pqFunc = func(a any) int {
-			if t, ok := a.(T); ok {
-				return checkPrior(t)
+		cfg.lessFunc = func(a, b any) bool {
+			ta, okA := a.(T)
+			tb, okB := b.(T)
+			if okA && okB {
+				return lessFunc(ta, tb)
 			}
-			return 0
+			return false
 		}
 	}
 }

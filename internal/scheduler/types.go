@@ -55,8 +55,8 @@ type ProcessorConfig[T, R any] struct {
 	// If true, enable priority queue for scheduling.
 	UsePq bool
 
-	// Function that computes priority for a task (lower value = higher priority).
-	PqFunc func(a T) int
+	// Function that compares two tasks, returns true if 'a' has higher priority than 'b'.
+	LessFunc func(a, b T) bool
 
 	// MPMC queue configuration:
 

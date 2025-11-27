@@ -9,7 +9,7 @@ import (
 )
 
 // priorityQueue is a generic min-heap based priority queue used within the worker pool.
-// It orders submitted tasks based on a user-defined priority function.
+// It orders submitted tasks based on a user-defined comparison function.
 //
 // Type Parameters:
 //   - T: The input task type.
@@ -17,17 +17,18 @@ import (
 //
 // Fields:
 //   - queue: The underlying slice of submitted tasks (heap structure).
-//   - checkPrior: Function to compute the priority of a task, lower value means higher priority.
+//   - lessFunc: Function to compare two tasks, returns true if the first task has higher priority.
 type priorityQueue[T any, R any] struct {
-	queue      []*types.SubmittedTask[T, R]
-	checkPrior func(a T) int
+	queue    []*types.SubmittedTask[T, R]
+	lessFunc func(a, b T) bool
 }
 
-// newPriorityQueue creates a new priorityQueue with the initial set of tasks and a priority function.
-func newPriorityQueue[T any, R any](queue []*types.SubmittedTask[T, R], checkPrior func(a T) int) *priorityQueue[T, R] {
+// newPriorityQueue creates a new priorityQueue with the initial set of tasks and a comparison function.
+// The lessFunc should return true if task 'a' has higher priority than task 'b'.
+func newPriorityQueue[T any, R any](queue []*types.SubmittedTask[T, R], lessFunc func(a, b T) bool) *priorityQueue[T, R] {
 	return &priorityQueue[T, R]{
-		queue:      queue,
-		checkPrior: checkPrior,
+		queue:    queue,
+		lessFunc: lessFunc,
 	}
 }
 
@@ -37,9 +38,9 @@ func (pq *priorityQueue[T, R]) Len() int {
 }
 
 // Less compares the priorities of two tasks at index i and j.
-// Returns true if the task at i has higher priority (less is considered higher).
+// Returns true if the task at i has higher priority than task at j.
 func (pq *priorityQueue[T, R]) Less(i, j int) bool {
-	return pq.checkPrior(pq.queue[i].Task) < pq.checkPrior(pq.queue[j].Task)
+	return pq.lessFunc(pq.queue[i].Task, pq.queue[j].Task)
 }
 
 // Swap swaps the position of two tasks in the queue.
@@ -82,7 +83,7 @@ func newPriorityQueueStrategy[T any, R any](conf *ProcessorConfig[T, R], tasks [
 		tasks = make([]*types.SubmittedTask[T, R], 0, conf.TaskBuffer)
 	}
 	return &priorityQueueStrategy[T, R]{
-		pq:            newPriorityQueue(tasks, conf.PqFunc),
+		pq:            newPriorityQueue(tasks, conf.LessFunc),
 		conf:          conf,
 		availableChan: make(chan struct{}, conf.TaskBuffer),
 	}
