@@ -65,4 +65,15 @@ type ProcessorConfig[T, R any] struct {
 
 	// Explicit queue capacity if using bounded queue.
 	MpmcCapacity int
+
+	// Task Fusion configuration:
+
+	// If true, wrap the scheduling strategy with fusion (batching) strategy.
+	UseFusion bool
+
+	// Time window to accumulate tasks before flushing (used when UseFusion is true).
+	FusionWindow time.Duration
+
+	// Maximum batch size before forcing a flush (used when UseFusion is true).
+	FusionBatchSize int
 }
