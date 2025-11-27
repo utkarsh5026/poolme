@@ -39,8 +39,8 @@ func CreateSchedulingStrategy[T, R any](conf *ProcessorConfig[T, R], tasks []*ty
 		s = newWorkStealingStrategy(256, conf)
 
 	case SchedulingPriorityQueue:
-		if conf.PqFunc == nil {
-			return nil, errors.New("priority queue enabled but no priority function provided")
+		if conf.LessFunc == nil {
+			return nil, errors.New("priority queue enabled but no comparison function provided")
 		}
 		s = newPriorityQueueStrategy(conf, tasks)
 
