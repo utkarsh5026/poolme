@@ -452,12 +452,12 @@ func TestWorkerPool_WithOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pool := NewWorkerPool[int, int](tt.opts...)
 
-			if tt.wantWorkers > 0 && pool.conf.workerCount != tt.wantWorkers {
-				t.Errorf("expected %d workers, got %d", tt.wantWorkers, pool.conf.workerCount)
+			if tt.wantWorkers > 0 && pool.conf.WorkerCount != tt.wantWorkers {
+				t.Errorf("expected %d workers, got %d", tt.wantWorkers, pool.conf.WorkerCount)
 			}
 
-			if tt.wantBuffer > 0 && pool.conf.taskBuffer != tt.wantBuffer {
-				t.Errorf("expected buffer size %d, got %d", tt.wantBuffer, pool.conf.taskBuffer)
+			if tt.wantBuffer > 0 && pool.conf.TaskBuffer != tt.wantBuffer {
+				t.Errorf("expected buffer size %d, got %d", tt.wantBuffer, pool.conf.TaskBuffer)
 			}
 		})
 	}

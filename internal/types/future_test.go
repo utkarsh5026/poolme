@@ -1,4 +1,4 @@
-package pool
+package types
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 
 func TestFuture_Get(t *testing.T) {
 	t.Run("successful result", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 
 		// Send result in background
 		go func() {
@@ -35,7 +35,7 @@ func TestFuture_Get(t *testing.T) {
 	})
 
 	t.Run("error result", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 		expectedErr := errors.New("task failed")
 
 		go func() {
@@ -60,7 +60,7 @@ func TestFuture_Get(t *testing.T) {
 	})
 
 	t.Run("multiple Get calls return same result", func(t *testing.T) {
-		future := newFuture[int, string]()
+		future := NewFuture[int, string]()
 
 		go func() {
 			future.result <- Result[int, string]{
@@ -87,7 +87,7 @@ func TestFuture_Get(t *testing.T) {
 
 func TestFuture_GetWithContext(t *testing.T) {
 	t.Run("successful result before timeout", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
 
@@ -114,7 +114,7 @@ func TestFuture_GetWithContext(t *testing.T) {
 	})
 
 	t.Run("context timeout before result", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 
@@ -141,7 +141,7 @@ func TestFuture_GetWithContext(t *testing.T) {
 	})
 
 	t.Run("context cancelled", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 		ctx, cancel := context.WithCancel(context.Background())
 
 		go func() {
@@ -172,7 +172,7 @@ func TestFuture_GetWithContext(t *testing.T) {
 	})
 
 	t.Run("multiple GetWithContext calls return same result", func(t *testing.T) {
-		future := newFuture[int, string]()
+		future := NewFuture[int, string]()
 		ctx := context.Background()
 
 		go func() {
@@ -197,7 +197,7 @@ func TestFuture_GetWithContext(t *testing.T) {
 
 func TestFuture_TryGet(t *testing.T) {
 	t.Run("result not ready", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 
 		value, key, err, ready := future.TryGet()
 
@@ -216,7 +216,7 @@ func TestFuture_TryGet(t *testing.T) {
 	})
 
 	t.Run("result ready", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 
 		// Send result
 		future.result <- Result[string, int]{
@@ -245,7 +245,7 @@ func TestFuture_TryGet(t *testing.T) {
 	})
 
 	t.Run("multiple TryGet calls after ready", func(t *testing.T) {
-		future := newFuture[int, string]()
+		future := NewFuture[int, string]()
 
 		future.result <- Result[int, string]{
 			Value: 789,
@@ -272,7 +272,7 @@ func TestFuture_TryGet(t *testing.T) {
 
 func TestFuture_Done(t *testing.T) {
 	t.Run("channel closed when result ready", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 
 		// Result not ready yet
 		select {
@@ -302,7 +302,7 @@ func TestFuture_Done(t *testing.T) {
 	})
 
 	t.Run("use Done in select", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 
 		go func() {
 			time.Sleep(50 * time.Millisecond)
@@ -336,7 +336,7 @@ func TestFuture_Done(t *testing.T) {
 
 func TestFuture_IsReady(t *testing.T) {
 	t.Run("not ready initially", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 
 		if future.IsReady() {
 			t.Error("expected IsReady to be false")
@@ -344,7 +344,7 @@ func TestFuture_IsReady(t *testing.T) {
 	})
 
 	t.Run("ready after result sent", func(t *testing.T) {
-		future := newFuture[string, int]()
+		future := NewFuture[string, int]()
 
 		future.result <- Result[string, int]{
 			Value: "ready",
@@ -366,7 +366,7 @@ func TestFuture_IsReady(t *testing.T) {
 
 func TestFuture_ConcurrentAccess(t *testing.T) {
 	t.Run("concurrent Get calls", func(t *testing.T) {
-		future := newFuture[int, string]()
+		future := NewFuture[int, string]()
 
 		go func() {
 			time.Sleep(50 * time.Millisecond)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/utkarsh5026/poolme/internal/algorithms"
+	"github.com/utkarsh5026/poolme/internal/scheduler"
 )
 
 var (
@@ -126,34 +127,7 @@ func nextPowerOfTwo(n int) int {
 	return power
 }
 
-func createSchedulingStrategy[T, R any](conf *processorConfig[T, R], tasks []*submittedTask[T, R]) (schedulingStrategy[T, R], error) {
-	strategyType := conf.schedulingStrategy
-
-	if conf.usePq {
-		strategyType = SchedulingPriorityQueue
-	}
-
-	switch strategyType {
-	case SchedulingWorkStealing:
-		return newWorkStealingStrategy(256, conf), nil
-
-	case SchedulingPriorityQueue:
-		if conf.pqFunc == nil {
-			return nil, errors.New("priority queue enabled but no priority function provided")
-		}
-		return newPriorityQueueStrategy(conf, tasks), nil
-
-	case SchedulingMPMC:
-		return newMPMCStrategy(conf, conf.mpmcBounded, conf.mpmcCapacity), nil
-
-	case SchedulingChannel:
-		fallthrough
-	default:
-		return newChannelStrategy(conf), nil
-	}
-}
-
-func createConfig[T, R any](opts ...WorkerPoolOption) *processorConfig[T, R] {
+func createConfig[T, R any](opts ...WorkerPoolOption) *scheduler.ProcessorConfig[T, R] {
 	cfg := &workerPoolConfig{
 		workerCount:         runtime.GOMAXPROCS(0),
 		taskBuffer:          0, // Will be set to workerCount if not specified
@@ -191,22 +165,22 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *processorConfig[T, R] {
 
 	beforeTaskStart, onTaskEnd, onRetry := checkfuncs[T, R](cfg, expectedTaskType, expectedResultType)
 
-	return &processorConfig[T, R]{
-		workerCount:        cfg.workerCount,
-		taskBuffer:         cfg.taskBuffer,
-		maxAttempts:        cfg.maxAttempts,
-		initialDelay:       cfg.initialDelay,
-		rateLimiter:        cfg.rateLimiter,
-		beforeTaskStart:    beforeTaskStart,
-		onTaskEnd:          onTaskEnd,
-		onRetry:            onRetry,
-		continueOnErr:      cfg.continueOnError,
-		backoffStrategy:    backoffStrategy,
-		schedulingStrategy: cfg.schedulingStrategy,
-		usePq:              cfg.usePq,
+	return &scheduler.ProcessorConfig[T, R]{
+		WorkerCount:        cfg.workerCount,
+		TaskBuffer:         cfg.taskBuffer,
+		MaxAttempts:        cfg.maxAttempts,
+		InitialDelay:       cfg.initialDelay,
+		RateLimiter:        cfg.rateLimiter,
+		BeforeTaskStart:    beforeTaskStart,
+		OnTaskEnd:          onTaskEnd,
+		OnRetry:            onRetry,
+		ContinueOnErr:      cfg.continueOnError,
+		BackoffStrategy:    backoffStrategy,
+		SchedulingStrategy: cfg.schedulingStrategy,
+		UsePq:              cfg.usePq,
 		// The type of cfg.pqFunc is func(a any) int, but processorConfig expects func(a T) int
 		// Provide an adapter if pqFunc is non-nil
-		pqFunc: func() func(a T) int {
+		PqFunc: func() func(a T) int {
 			if cfg.pqFunc == nil {
 				return nil
 			}
@@ -214,7 +188,7 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *processorConfig[T, R] {
 				return cfg.pqFunc(any(a))
 			}
 		}(),
-		mpmcBounded:  cfg.mpmcBounded,
-		mpmcCapacity: cfg.mpmcCapacity,
+		MpmcBounded:  cfg.mpmcBounded,
+		MpmcCapacity: cfg.mpmcCapacity,
 	}
 }

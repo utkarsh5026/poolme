@@ -1,45 +1,65 @@
-package pool
+package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"time"
+
+	"github.com/utkarsh5026/poolme/internal/types"
 )
+
+// nextPowerOfTwo returns the next power of 2 >= n
+func nextPowerOfTwo(n int) int {
+	if n <= 0 {
+		return 1
+	}
+
+	if n&(n-1) == 0 {
+		return n
+	}
+
+	power := 1
+	for power < n {
+		power *= 2
+	}
+	return power
+}
 
 // executeSubmitted executes a submitted task and sends the result to its associated future.
 // This function is called by workers to process tasks that were submitted via SubmitWithFuture.
 // It wraps the task execution logic and ensures the result is properly delivered to the waiting future.
-func executeSubmitted[T, R any](ctx context.Context, s *submittedTask[T, R], conf *processorConfig[T, R], executor ProcessFunc[T, R], handler resultHandler[T, R]) error {
-	result, err := executeTask(ctx, conf, s.task, executor)
-	handler(s, newResult(result, s.id, err))
+func executeSubmitted[T, R any](ctx context.Context, s *types.SubmittedTask[T, R], conf *ProcessorConfig[T, R], executor types.ProcessFunc[T, R], handler types.ResultHandler[T, R]) error {
+	result, err := executeTask(ctx, conf, s.Task, executor)
+	handler(s, types.NewResult(result, s.Id, err))
 	return err
 }
 
 // executeTask encapsulates the common logic for executing a task with hooks, rate limiting, and processing.
 // This function is used by both worker and runSubmitWorker to avoid code duplication.
-// It handles rate limiting, hook execution (beforeTaskStart and onTaskEnd), and task processing with retry.
+// It handles rate limiting, hook execution (BeforeTaskStart and onTaskEnd), and task processing with retry.
 func executeTask[T, R any](
 	ctx context.Context,
-	conf *processorConfig[T, R],
+	conf *ProcessorConfig[T, R],
 	task T,
-	processFn ProcessFunc[T, R],
+	processFn types.ProcessFunc[T, R],
 ) (R, error) {
-	if conf.rateLimiter != nil {
-		if err := conf.rateLimiter.Wait(ctx); err != nil {
+	if conf.RateLimiter != nil {
+		if err := conf.RateLimiter.Wait(ctx); err != nil {
 			var zero R
 			return zero, err
 		}
 	}
 
-	if conf.beforeTaskStart != nil {
-		conf.beforeTaskStart(task)
+	if conf.BeforeTaskStart != nil {
+		conf.BeforeTaskStart(task)
 	}
 
 	result, err := processWithRecovery(ctx, conf, task, processFn)
 
-	if conf.onTaskEnd != nil {
-		conf.onTaskEnd(task, result, err)
+	if conf.OnTaskEnd != nil {
+		conf.OnTaskEnd(task, result, err)
 	}
 
 	return result, err
@@ -50,9 +70,9 @@ func executeTask[T, R any](
 // Retries use exponential backoff if initialDelay is configured.
 func processWithRecovery[T, R any](
 	ctx context.Context,
-	conf *processorConfig[T, R],
+	conf *ProcessorConfig[T, R],
 	task T,
-	processFn ProcessFunc[T, R],
+	processFn types.ProcessFunc[T, R],
 ) (result R, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -73,12 +93,12 @@ func processWithRecovery[T, R any](
 func processWithRetry[T, R any](
 	ctx context.Context,
 	task T,
-	conf *processorConfig[T, R],
-	processFn ProcessFunc[T, R],
+	conf *ProcessorConfig[T, R],
+	processFn types.ProcessFunc[T, R],
 ) (R, error) {
 	var result R
 	var err error
-	maxAttempts := max(conf.maxAttempts, 1)
+	maxAttempts := max(conf.MaxAttempts, 1)
 
 	for attempt := range maxAttempts {
 		select {
@@ -87,8 +107,8 @@ func processWithRetry[T, R any](
 		default:
 		}
 
-		if attempt > 0 && conf.backoffStrategy != nil {
-			delay := conf.backoffStrategy.NextDelay(attempt-1, err)
+		if attempt > 0 && conf.BackoffStrategy != nil {
+			delay := conf.BackoffStrategy.NextDelay(attempt-1, err)
 			if delay > 0 {
 				select {
 				case <-time.After(delay):
@@ -103,10 +123,30 @@ func processWithRetry[T, R any](
 			return result, nil
 		}
 
-		if conf.onRetry != nil && attempt < maxAttempts-1 {
-			conf.onRetry(task, attempt+1, err)
+		if conf.OnRetry != nil && attempt < maxAttempts-1 {
+			conf.OnRetry(task, attempt+1, err)
 		}
 	}
 
 	return result, err
+}
+
+// handleExecutionError handles errors from executeSubmitted with standardized logic.
+// Returns the error if the worker should stop, or nil if it should continue.
+// Calls drainFunc before returning for context errors.
+func handleExecutionError(err error, continueOnErr bool, drainFunc func()) error {
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		drainFunc()
+		return err
+	}
+
+	if !continueOnErr {
+		return err
+	}
+
+	return nil
 }
