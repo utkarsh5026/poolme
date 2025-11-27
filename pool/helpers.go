@@ -110,23 +110,9 @@ func waitUntil(d <-chan struct{}, timeout time.Duration) error {
 	}
 }
 
-// nextPowerOfTwo returns the next power of 2 >= n
-func nextPowerOfTwo(n int) int {
-	if n <= 0 {
-		return 1
-	}
-
-	if n&(n-1) == 0 {
-		return n
-	}
-
-	power := 1
-	for power < n {
-		power *= 2
-	}
-	return power
-}
-
+// createConfig constructs a scheduler.ProcessorConfig from the provided WorkerPoolOptions.
+// It applies default values for any options not explicitly set by the user.
+// It also validates and wraps user-supplied hook functions to ensure type safety.
 func createConfig[T, R any](opts ...WorkerPoolOption) *scheduler.ProcessorConfig[T, R] {
 	cfg := &workerPoolConfig{
 		workerCount:         runtime.GOMAXPROCS(0),
