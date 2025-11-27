@@ -33,22 +33,29 @@ func CreateSchedulingStrategy[T, R any](conf *ProcessorConfig[T, R], tasks []*ty
 		strategyType = SchedulingPriorityQueue
 	}
 
+	var s SchedulingStrategy[T, R]
 	switch strategyType {
 	case SchedulingWorkStealing:
-		return newWorkStealingStrategy(256, conf), nil
+		s = newWorkStealingStrategy(256, conf)
 
 	case SchedulingPriorityQueue:
 		if conf.PqFunc == nil {
 			return nil, errors.New("priority queue enabled but no priority function provided")
 		}
-		return newPriorityQueueStrategy(conf, tasks), nil
+		s = newPriorityQueueStrategy(conf, tasks)
 
 	case SchedulingMPMC:
-		return newMPMCStrategy(conf, conf.MpmcBounded, conf.MpmcCapacity), nil
+		s = newMPMCStrategy(conf, conf.MpmcBounded, conf.MpmcCapacity)
 
 	case SchedulingChannel:
 		fallthrough
 	default:
-		return newChannelStrategy(conf), nil
+		s = newChannelStrategy(conf)
 	}
+
+	if conf.UseFusion {
+		return newFusionStrategy(conf, s), nil
+	}
+
+	return s, nil
 }

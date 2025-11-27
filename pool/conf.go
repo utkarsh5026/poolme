@@ -87,6 +87,11 @@ type workerPoolConfig struct {
 	mpmcBounded  bool
 	mpmcCapacity int
 
+	// Task Fusion configuration
+	useFusion       bool
+	fusionWindow    time.Duration
+	fusionBatchSize int
+
 	// Hook functions stored as any for flexibility
 	beforeTaskStart     func(any)
 	beforeTaskStartType string
@@ -455,6 +460,41 @@ func WithUnboundedQueue() MPMCOption {
 	return func(cfg *workerPoolConfig) {
 		cfg.mpmcBounded = false
 		cfg.mpmcCapacity = 0 // Use default initial capacity
+	}
+}
+
+// WithTaskFusion enables task batching/fusion to improve throughput.
+// Tasks are accumulated in batches before being dispatched to workers.
+//
+// Task fusion provides:
+//   - Reduced scheduling overhead by processing tasks in batches
+//   - Better throughput for high-volume, small task workloads
+//   - Automatic flushing based on time window or batch size
+//   - Lower lock contention through batch operations
+//
+// Parameters:
+//   - window: Maximum time to wait before flushing accumulated tasks
+//   - batchSize: Maximum number of tasks to accumulate before forcing a flush
+//
+// Best for:
+//   - High-throughput scenarios with many small tasks
+//   - I/O-bound workloads where batching reduces overhead
+//   - Scenarios where small delays are acceptable for better throughput
+//   - Systems with high task submission rates
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithWorkerCount(8),
+//	    WithTaskFusion(100*time.Millisecond, 50), // Flush every 100ms or 50 tasks
+//	)
+func WithTaskFusion(window time.Duration, batchSize int) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		if window > 0 && batchSize > 0 {
+			cfg.useFusion = true
+			cfg.fusionWindow = window
+			cfg.fusionBatchSize = batchSize
+		}
 	}
 }
 
