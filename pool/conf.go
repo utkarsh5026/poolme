@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/utkarsh5026/poolme/internal/algorithms"
+	"github.com/utkarsh5026/poolme/internal/scheduler"
 	"golang.org/x/time/rate"
 )
 
@@ -34,7 +35,7 @@ const (
 )
 
 // SchedulingStrategyType defines the task scheduling algorithm to use.
-type SchedulingStrategyType int
+type SchedulingStrategyType = scheduler.SchedulingStrategyType
 
 const (
 	// SchedulingChannel uses a simple channel-based strategy (default).
@@ -77,7 +78,7 @@ type workerPoolConfig struct {
 	backoffJitterFactor float64
 	retryPolicySet      bool // Track if WithRetryPolicy was explicitly called
 
-	schedulingStrategy SchedulingStrategyType
+	schedulingStrategy scheduler.SchedulingStrategyType
 
 	usePq  bool
 	pqFunc func(a any) int
@@ -326,7 +327,7 @@ func WithDecorrelatedJitter(initialDelay, maxDelay time.Duration) WorkerPoolOpti
 func WithPriorityQueue[T any](checkPrior func(a T) int) WorkerPoolOption {
 	return func(cfg *workerPoolConfig) {
 		cfg.usePq = true
-		cfg.schedulingStrategy = SchedulingPriorityQueue
+		cfg.schedulingStrategy = scheduler.SchedulingPriorityQueue
 		cfg.pqFunc = func(a any) int {
 			if t, ok := a.(T); ok {
 				return checkPrior(t)

@@ -3,6 +3,9 @@ package pool
 import (
 	"context"
 	"sync"
+
+	"github.com/utkarsh5026/poolme/internal/scheduler"
+	"github.com/utkarsh5026/poolme/internal/types"
 )
 
 // sliceProcessor orchestrates parallel processing of a slice of tasks with result ordering.
@@ -54,11 +57,7 @@ func (s *sliceProcessor[T, R]) process(ctx context.Context, workerCount int) ([]
 
 	submittedTasks := make([]*submittedTask[T, R], len(s.tasks))
 	for i, task := range s.tasks {
-		submittedTasks[i] = &submittedTask[T, R]{
-			task:   task,
-			id:     int64(i),
-			future: nil,
-		}
+		submittedTasks[i] = types.NewSubmittedTask[T, R](task, int64(i), nil)
 		orderMap[int64(i)] = i
 	}
 
@@ -121,11 +120,7 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 	submittedTasks := make([]*submittedTask[T, R], 0, len(m.tasks))
 	taskID := int64(0)
 	for key, task := range m.tasks {
-		st := &submittedTask[T, R]{
-			task:   task,
-			id:     taskID,
-			future: nil,
-		}
+		st := types.NewSubmittedTask[T, R](task, taskID, nil)
 		keyMap[taskID] = key
 		submittedTasks = append(submittedTasks, st)
 		taskID++
@@ -188,7 +183,7 @@ func startWorkers[T, R any](ctx context.Context, workers int, strategy schedulin
 // This function creates the scheduling strategy, submits all tasks, starts workers, and collects
 // results. It automatically handles strategy cleanup and error propagation.
 func runScheduler[T, R any](ctx context.Context, workerCount int, conf *processorConfig[T, R], tasks []*submittedTask[T, R], p ProcessFunc[T, R], onResult func(r *Result[R, int64])) error {
-	s, err := createSchedulingStrategy(conf, nil)
+	s, err := scheduler.CreateSchedulingStrategy(conf, nil)
 	if err != nil {
 		return err
 	}

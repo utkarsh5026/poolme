@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/utkarsh5026/poolme/internal/scheduler"
+	"github.com/utkarsh5026/poolme/internal/types"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -18,7 +20,7 @@ import (
 //   - T: The input task type processed by workers
 //   - R: The output/result type produced by processing tasks
 type Scheduler[T, R any] struct {
-	config *processorConfig[T, R]
+	config *scheduler.ProcessorConfig[T, R]
 	mu     sync.RWMutex
 	state  *poolState[T, R]
 }
@@ -75,7 +77,7 @@ func (wp *Scheduler[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, R
 		return errors.New("pool already started")
 	}
 
-	strategy, err := createSchedulingStrategy(wp.config, nil)
+	strategy, err := scheduler.CreateSchedulingStrategy(wp.config, nil)
 	if err != nil {
 		return err
 	}
@@ -90,11 +92,11 @@ func (wp *Scheduler[T, R]) Start(ctx context.Context, processFn ProcessFunc[T, R
 	wp.state = state
 	state.started.Store(true)
 
-	n := wp.config.workerCount
+	n := wp.config.WorkerCount
 	var g errgroup.Group
 
-	var resHandler resultHandler[T, R] = func(t *submittedTask[T, R], r *Result[R, int64]) {
-		t.future.result <- *r
+	var resHandler types.ResultHandler[T, R] = func(t *types.SubmittedTask[T, R], r *types.Result[R, int64]) {
+		t.Future.AddResult(*r)
 	}
 
 	for i := range n {
@@ -152,13 +154,9 @@ func (wp *Scheduler[T, R]) Submit(task T) (*Future[R, int64], error) {
 	}
 
 	taskID := state.taskIDCounter.Add(1)
-	future := newFuture[R, int64]()
+	future := types.NewFuture[R, int64]()
 
-	st := &submittedTask[T, R]{
-		task:   task,
-		id:     taskID,
-		future: future,
-	}
+	st := types.NewSubmittedTask(task, taskID, future)
 
 	err := state.strategy.Submit(st)
 	return future, err
@@ -215,7 +213,7 @@ type poolState[T any, R any] struct {
 	started       atomic.Bool
 	shutdown      atomic.Bool
 	taskIDCounter atomic.Int64
-	strategy      schedulingStrategy[T, R]
+	strategy      scheduler.SchedulingStrategy[T, R]
 	done          chan struct{} // Closed when all workers have finished
 }
 
@@ -227,7 +225,7 @@ type poolState[T any, R any] struct {
 //   - T: The input task type
 //   - R: The result type
 type WorkerPool[T any, R any] struct {
-	conf *processorConfig[T, R]
+	conf *scheduler.ProcessorConfig[T, R]
 }
 
 // NewWorkerPool creates a new worker pool with the given options.
@@ -282,7 +280,7 @@ func (wp *WorkerPool[T, R]) Process(
 	processFn ProcessFunc[T, R],
 ) ([]R, error) {
 	sp := newSliceProcessor(tasks, processFn, wp.conf)
-	return sp.Process(ctx, min(wp.conf.workerCount, len(tasks)))
+	return sp.Process(ctx, min(wp.conf.WorkerCount, len(tasks)))
 }
 
 // ProcessMap executes a batch of tasks from a map concurrently using a pool of workers.
@@ -310,5 +308,5 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 	processFn ProcessFunc[T, R],
 ) (map[string]R, error) {
 	mp := newMapProcessor(tasks, processFn, wp)
-	return mp.Process(ctx, min(wp.conf.workerCount, len(tasks)))
+	return mp.Process(ctx, min(wp.conf.WorkerCount, len(tasks)))
 }
