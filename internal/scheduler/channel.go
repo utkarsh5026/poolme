@@ -14,11 +14,12 @@ import (
 //
 // Each worker goroutine reads from its own channel to execute submitted tasks.
 type channelStrategy[T any, R any] struct {
-	config    *ProcessorConfig[T, R]            // Processor configuration parameters.
-	taskChans []chan *types.SubmittedTask[T, R] // Per-worker task channels.
-	counter   atomic.Int64                      // Atomic counter for round-robin channel selection.
-	quit      chan struct{}                     // Channel to signal batch goroutines to quit.
-	wg        sync.WaitGroup                    // WaitGroup to wait for running batch submissions.
+	config       *ProcessorConfig[T, R]            // Processor configuration parameters.
+	taskChans    []chan *types.SubmittedTask[T, R] // Per-worker task channels.
+	counter      atomic.Int64                      // Atomic counter for round-robin channel selection.
+	quit         chan struct{}                     // Channel to signal batch goroutines to quit.
+	wg           sync.WaitGroup                    // WaitGroup to wait for running batch submissions.
+	affinityFunc func(t T) (hash string)
 }
 
 // newChannelStrategy creates a new instance of channelStrategy.
@@ -27,9 +28,10 @@ type channelStrategy[T any, R any] struct {
 func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrategy[T, R] {
 	n := max(runtime.NumCPU(), conf.WorkerCount)
 	c := &channelStrategy[T, R]{
-		config:    conf,
-		taskChans: make([]chan *types.SubmittedTask[T, R], n),
-		quit:      make(chan struct{}),
+		config:       conf,
+		taskChans:    make([]chan *types.SubmittedTask[T, R], n),
+		quit:         make(chan struct{}),
+		affinityFunc: conf.AffinityFunc,
 	}
 
 	for i := range n {
@@ -42,7 +44,7 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 // Submit submits a single task to the next worker channel using round-robin scheduling.
 // Returns nil since this operation cannot fail synchronously.
 func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
-	s.taskChans[s.next()] <- task
+	s.taskChans[s.next(task)] <- task
 	return nil
 }
 
@@ -55,7 +57,7 @@ func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) 
 		defer s.wg.Done()
 		for _, task := range tasks {
 			select {
-			case s.taskChans[s.next()] <- task:
+			case s.taskChans[s.next(task)] <- task:
 			case <-s.quit:
 				return
 			}
@@ -123,6 +125,32 @@ func (s *channelStrategy[T, R]) drain(
 }
 
 // next returns the next channel index in a round-robin fashion using an atomic counter.
-func (s *channelStrategy[T, R]) next() int64 {
+func (s *channelStrategy[T, R]) next(t *types.SubmittedTask[T, R]) int64 {
+	if s.affinityFunc != nil {
+		key := s.affinityFunc(t.Task)
+		hash := s.fnvHash(key)
+		return int64(hash % uint32(len(s.taskChans)))
+	}
 	return s.counter.Add(1) % int64(len(s.taskChans))
+}
+
+// fnvHash computes the FNV-1a hash for the given string key.
+//
+// FNV-1a (Fowler–Noll–Vo) is a fast, non-cryptographic hash function
+// often used for hash tables. This function is used to spread
+// affinity keys uniformly across internal task channels.
+//
+// https://en.wikipedia.org/wiki/Fowler–Noll–Vo_hash_function
+func (s *channelStrategy[T, R]) fnvHash(key string) uint32 {
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+
+	hash := uint32(offset32)
+	for i := 0; i < len(key); i++ {
+		hash ^= uint32(key[i])
+		hash *= prime32
+	}
+	return hash
 }
