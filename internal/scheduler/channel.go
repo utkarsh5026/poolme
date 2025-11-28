@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 
 	"github.com/utkarsh5026/poolme/internal/types"
@@ -20,8 +19,7 @@ type channelStrategy[T any, R any] struct {
 	config       *ProcessorConfig[T, R]            // Processor configuration parameters.
 	taskChans    []chan *types.SubmittedTask[T, R] // Per-worker task channels.
 	counter      atomic.Int64                      // Atomic counter for round-robin channel selection.
-	quit         chan struct{}                     // Channel to signal batch goroutines to quit.
-	wg           sync.WaitGroup                    // WaitGroup to wait for running batch submissions.
+	quit         chan struct{}                     // Channel to signal task submissions to stop.
 	affinityFunc func(t T) string
 }
 
@@ -53,21 +51,22 @@ func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	return nil
 }
 
-// SubmitBatch submits a batch of tasks for execution.
-// The addition is performed in a goroutine for asynchronous delivery and returns immediately.
-// Returns the number of tasks submitted (i.e., len(tasks)) and no error.
+// SubmitBatch submits a batch of tasks for execution synchronously.
+// Returns the number of tasks successfully submitted and an error if shutdown was signaled during submission.
+// If shutdown occurs mid-batch, returns the count of tasks submitted before shutdown and context.Canceled error.
 func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		for _, task := range tasks {
-			idx := s.next(task)
-			if exit := s.tryToSubmit(idx, task); exit {
-				return
+	submitted := 0
+	for _, task := range tasks {
+		idx := s.next(task)
+		if exit := s.tryToSubmit(idx, task); exit {
+			if submitted == 0 {
+				return 0, context.Canceled
 			}
+			return submitted, context.Canceled
 		}
-	}()
-	return len(tasks), nil
+		submitted++
+	}
+	return submitted, nil
 }
 
 // tryToSubmit quickly enqueues a task to a worker channel:
@@ -133,12 +132,10 @@ func (s *channelStrategy[T, R]) submitRoundRobin(idx int, task *types.SubmittedT
 }
 
 // Shutdown gracefully shuts down the channel strategy:
-// - Signals all SubmitBatch goroutines to stop early.
-// - Waits for all SubmitBatch goroutines to finish.
+// - Signals ongoing task submissions to stop.
 // - Closes all worker task channels, signaling workers to exit.
 func (s *channelStrategy[T, R]) Shutdown() {
-	close(s.quit) // Signal all SubmitBatch goroutines to stop
-	s.wg.Wait()   // Wait for all SubmitBatch goroutines to finish
+	close(s.quit) // Signal ongoing submissions to stop
 	for _, ch := range s.taskChans {
 		close(ch)
 	}

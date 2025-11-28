@@ -219,7 +219,7 @@ func TestChannelStrategy_SubmitBatchWithShutdown(t *testing.T) {
 
 	s := newChannelStrategy(conf)
 
-	// Create a large batch
+	// Create a large batch that will exceed buffer capacity
 	batchSize := 100
 	tasks := make([]*types.SubmittedTask[int, int], batchSize)
 	for i := 0; i < batchSize; i++ {
@@ -227,41 +227,58 @@ func TestChannelStrategy_SubmitBatchWithShutdown(t *testing.T) {
 		tasks[i] = types.NewSubmittedTask(i, int64(i), future)
 	}
 
-	// Submit batch
-	_, err := s.SubmitBatch(tasks)
-	if err != nil {
-		t.Fatalf("SubmitBatch failed: %v", err)
-	}
+	// Submit batch in a goroutine and trigger shutdown concurrently
+	// This tests that shutdown interrupts an in-progress batch submission
+	var submitErr error
+	var submittedCount int
+	done := make(chan struct{})
 
-	// Shutdown immediately (should stop batch goroutine early)
+	go func() {
+		submittedCount, submitErr = s.SubmitBatch(tasks)
+		close(done)
+	}()
+
+	// Give it a tiny moment to start submitting
+	time.Sleep(10 * time.Millisecond)
+
+	// Shutdown while submission is in progress
 	s.Shutdown()
 
-	// Verify all channels are closed by checking if we can read from them
-	// Closed channels will return immediately with ok=false
+	// Wait for submission to complete
+	<-done
+
+	// Verify shutdown interrupted the submission
+	if submitErr != context.Canceled {
+		t.Errorf("expected context.Canceled error, got: %v", submitErr)
+	}
+
+	// Should have submitted some tasks (at least the buffer size) but not all
+	if submittedCount == 0 {
+		t.Error("expected at least some tasks to be submitted before shutdown")
+	}
+	if submittedCount >= batchSize {
+		t.Errorf("expected shutdown to interrupt submission, but all %d tasks were submitted", batchSize)
+	}
+
+	t.Logf("Submitted %d/%d tasks before shutdown (as expected)", submittedCount, batchSize)
+
+	// Verify all channels are closed by draining them
 	for i, ch := range s.taskChans {
-		// Drain any remaining tasks
+		// Drain any buffered tasks first
+		drained := 0
 		for {
-			select {
-			case _, ok := <-ch:
-				if !ok {
-					// Channel is closed, which is what we expect
-					goto channelClosed
-				}
-				// Continue draining
-			default:
-				// No more tasks, but channel might not be closed yet
-				// Try reading one more time with blocking to confirm closure
-				_, ok := <-ch
-				if !ok {
-					goto channelClosed
-				}
-				t.Errorf("channel %d is not closed after shutdown", i)
-				goto nextChan
+			_, ok := <-ch
+			if !ok {
+				// Channel is closed - this is expected
+				break
+			}
+			drained++
+			if drained > batchSize {
+				t.Errorf("channel %d has more tasks than expected", i)
+				break
 			}
 		}
-	channelClosed:
-		// Good - channel is closed as expected
-	nextChan:
+		t.Logf("Channel %d drained %d tasks and is now closed", i, drained)
 	}
 }
 
@@ -696,7 +713,7 @@ func TestChannelStrategy_FNVHash(t *testing.T) {
 
 	// Test hash distribution (different inputs should produce different hashes)
 	hashes := make(map[uint32]bool)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		key := fmt.Sprintf("key-%d", i)
 		hash := s.fnvHash(key)
 		if hashes[hash] {
@@ -723,23 +740,22 @@ func TestChannelStrategy_ConcurrentSubmit(t *testing.T) {
 	defer s.Shutdown()
 
 	numGoroutines := 10
-	tasksPerGoroutine := 50
+	tasksPerGoroutine := 40 // Reduced from 50 to stay within buffer capacity (10 * 40 = 400 = 4 * 100)
 
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 
 	for g := range numGoroutines {
-		go func(goroutineID int) {
+		go func(gid, n int) {
 			defer wg.Done()
-			for i := range tasksPerGoroutine {
-				future := types.NewFuture[int, int64]()
-				taskID := int64(goroutineID*tasksPerGoroutine + i)
-				task := types.NewSubmittedTask(int(taskID), taskID, future)
+			for i := range n {
+				taskID := int64(gid*n + i)
+				task := types.NewSubmittedTask[int, int](int(taskID), taskID, nil)
 				if err := s.Submit(task); err != nil {
-					t.Errorf("goroutine %d: Submit failed: %v", goroutineID, err)
+					t.Errorf("goroutine %d: Submit failed: %v", gid, err)
 				}
 			}
-		}(g)
+		}(g, tasksPerGoroutine)
 	}
 
 	wg.Wait()
@@ -843,7 +859,7 @@ func TestChannelStrategy_MultipleWorkers(t *testing.T) {
 	// Start workers
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
-	for i := 0; i < numWorkers; i++ {
+	for i := range numWorkers {
 		workerID := int64(i)
 		go func(id int64) {
 			defer wg.Done()
