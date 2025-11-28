@@ -241,22 +241,13 @@ func TestChannelStrategy_SubmitBatchWithShutdown(t *testing.T) {
 	// Verify all channels are closed
 	for i, ch := range s.taskChans {
 		select {
-		case _, ok := <-ch:
-			if ok {
-				// Channel not closed, that's fine, just drain it
-			}
+		case <-ch:
 		default:
 			// Channel is closed or empty
 		}
 
 		// Try to send should panic or block (channel is closed)
 		func() {
-			defer func() {
-				if r := recover(); r == nil {
-					// No panic means channel wasn't closed, which might be OK
-					// depending on timing
-				}
-			}()
 			select {
 			case ch <- types.NewSubmittedTask(999, 999, types.NewFuture[int, int64]()):
 				t.Errorf("channel %d accepted task after shutdown", i)
@@ -528,12 +519,7 @@ func TestChannelStrategy_Shutdown(t *testing.T) {
 	// Verify all task channels are closed
 	for i, ch := range s.taskChans {
 		select {
-		case _, ok := <-ch:
-			if ok {
-				// Channel still has data, that's ok
-			} else {
-				// Channel is closed, which is what we want
-			}
+		case <-ch:
 		default:
 			t.Errorf("channel %d appears to be open and empty", i)
 		}
