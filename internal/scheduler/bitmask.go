@@ -37,13 +37,25 @@ func newBitmaskStrategy[T, R any](conf *ProcessorConfig[T, R]) *bitmaskStrategy[
 		queues[i] = make(chan *types.SubmittedTask[T, R], 1)
 	}
 
-	return &bitmaskStrategy[T, R]{
+	// All workers marked as idle
+	// This allows tasks to be submitted directly to worker channels before workers start
+	var initialMask uint64
+	if n == 64 {
+		initialMask = ^uint64(0) // All bits set
+	} else {
+		initialMask = (1 << n) - 1 // Set n bits
+	}
+
+	globalQueueSize := max(conf.TaskBuffer, conf.WorkerCount*10)
+	strategy := &bitmaskStrategy[T, R]{
 		workerChans: queues,
-		// Large buffer for overflow to handle bursts when everyone is busy
-		globalQueue: make(chan *types.SubmittedTask[T, R], conf.TaskBuffer),
+		globalQueue: make(chan *types.SubmittedTask[T, R], globalQueueSize),
 		config:      conf,
 		quit:        make(chan struct{}),
 	}
+	strategy.idleMask.Store(initialMask)
+
+	return strategy
 }
 
 func (s *bitmaskStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
