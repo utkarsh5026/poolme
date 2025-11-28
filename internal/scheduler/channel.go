@@ -2,11 +2,14 @@ package scheduler
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"sync/atomic"
 
 	"github.com/utkarsh5026/poolme/internal/types"
+)
+
+const (
+	retryForSameChannel = 4
 )
 
 // channelStrategy provides a simple scheduling strategy that distributes tasks
@@ -26,7 +29,7 @@ type channelStrategy[T any, R any] struct {
 // It initializes the required number of task channels (one per worker),
 // using the maximum of runtime.NumCPU() and configured WorkerCount.
 func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrategy[T, R] {
-	n := max(runtime.NumCPU(), conf.WorkerCount)
+	n := max(1, conf.WorkerCount)
 	c := &channelStrategy[T, R]{
 		config:       conf,
 		taskChans:    make([]chan *types.SubmittedTask[T, R], n),
@@ -60,14 +63,62 @@ func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) 
 	go func() {
 		defer s.wg.Done()
 		for _, task := range tasks {
-			select {
-			case s.taskChans[s.next(task)] <- task:
-			case <-s.quit:
+			idx := s.next(task)
+			sent, exit := s.sendToChannel(idx, task)
+			if exit {
 				return
+			}
+			if sent {
+				continue
+			}
+
+			sent = s.submitRoundRobin(int(idx), task)
+			if !sent {
+				select {
+				case s.taskChans[idx] <- task:
+				case <-s.quit:
+					return
+				}
 			}
 		}
 	}()
 	return len(tasks), nil
+}
+
+// sendToChannel tries to send a task to the channel at index idx.
+// It performs a small number of tries (controlled by retryForSameChannel) to put the task with a non-blocking attempt.
+// Returns (true, false) if successfully sent, (true, true) if quit signal received, or (false, false) if not sent after retries.
+func (s *channelStrategy[T, R]) sendToChannel(idx int64, task *types.SubmittedTask[T, R]) (sent bool, exit bool) {
+	for range retryForSameChannel {
+		select {
+		case s.taskChans[idx] <- task:
+			return true, false
+		case <-s.quit:
+			return true, true
+		default:
+			// taskChans[idx] is full; try again
+		}
+	}
+	return false, false
+}
+
+// submitRoundRobin attempts to enqueue the given task to a different worker's channel
+// (not at idx), checking channels in round-robin order. This helps balance load if the main
+// channel is full. Returns true if the task is submitted, or true immediately if a quit signal was received.
+func (s *channelStrategy[T, R]) submitRoundRobin(idx int, task *types.SubmittedTask[T, R]) bool {
+	numWorkers := len(s.taskChans)
+	for j := 1; j < numWorkers; j++ {
+		altIdx := (idx + j) % numWorkers
+		select {
+		case s.taskChans[altIdx] <- task:
+			return true
+		case <-s.quit:
+			return true
+		default:
+			continue
+		}
+	}
+	return false
 }
 
 // Shutdown gracefully shuts down the channel strategy:
@@ -86,19 +137,23 @@ func (s *channelStrategy[T, R]) Shutdown() {
 // It receives tasks from its dedicated channel and executes them.
 // Properly drains remaining tasks on context cancellation to ensure all submitted tasks are processed.
 func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
+	drain := func() {
+		s.drain(ctx, executor, h, workerID)
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			s.drain(ctx, executor, h, workerID)
+			drain()
 			return ctx.Err()
+		case <-s.quit:
+			drain()
+			return nil
 		case t, ok := <-s.taskChans[workerID]:
 			if !ok {
 				return nil
 			}
-			err := executeSubmitted(ctx, t, s.config, executor, h)
-			if err := handleExecutionError(err, s.config.ContinueOnErr, func() {
-				s.drain(ctx, executor, h, workerID)
-			}); err != nil {
+			if err := handleWithCare(ctx, t, s.config, executor, h, drain); err != nil {
+				drain()
 				return err
 			}
 		}
@@ -115,6 +170,7 @@ func (s *channelStrategy[T, R]) drain(
 	h types.ResultHandler[T, R],
 	workerID int64,
 ) {
+	drained := 0
 	for {
 		select {
 		case t, ok := <-s.taskChans[workerID]:
@@ -122,6 +178,7 @@ func (s *channelStrategy[T, R]) drain(
 				return
 			}
 			_ = executeSubmitted(ctx, t, s.config, executor, h)
+			drained++
 		default:
 			return
 		}
