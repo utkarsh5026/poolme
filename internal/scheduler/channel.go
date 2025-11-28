@@ -44,7 +44,6 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 // Submit submits a single task to the next worker channel using round-robin scheduling.
 // Returns nil since this operation cannot fail synchronously.
 func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
-	s.taskChans[s.next(task)] <- task
 	select {
 	case s.taskChans[s.next(task)] <- task:
 		return nil
