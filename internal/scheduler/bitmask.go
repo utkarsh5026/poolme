@@ -250,11 +250,6 @@ func (s *bitmaskStrategy[T, R]) markBusy(myBit uint64) {
 // Shutdown gracefully shuts down the bitmask strategy:
 // - Signals all SubmitBatch goroutines to stop early by closing quit.
 // - Waits for all SubmitBatch goroutines to finish.
-//
-// Note: We do NOT close worker channels or the global queue here because:
-// 1. Workers rely on the quit signal to exit (not channel closure)
-// 2. Workers may still be draining channels when Shutdown is called
-// 3. Closing channels while workers drain them can cause races
 func (s *bitmaskStrategy[T, R]) Shutdown() {
 	close(s.quit)
 	s.wg.Wait()
