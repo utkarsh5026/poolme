@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"math/bits"
-	"sync"
 	"sync/atomic"
 
 	"github.com/utkarsh5026/poolme/internal/types"
@@ -34,10 +33,8 @@ type bitmaskStrategy[T, R any] struct {
 
 	// config holds user configuration.
 	config *ProcessorConfig[T, R]
-	// quit is closed to signal shutdown to background goroutines.
+	// quit is closed to signal shutdown to ongoing task submissions.
 	quit chan struct{}
-	// wg tracks background SubmitBatch goroutines for clean shutdown.
-	wg sync.WaitGroup
 }
 
 // newBitmaskStrategy constructs a bitmaskStrategy using the given config.
@@ -77,6 +74,13 @@ func newBitmaskStrategy[T, R any](conf *ProcessorConfig[T, R]) *bitmaskStrategy[
 // enqueues the task to the global queue (which may block if full).
 // Returns ErrSchedulerClosed if shutting down.
 func (s *bitmaskStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
+	// Check if shutting down first to prioritize cancellation
+	select {
+	case <-s.quit:
+		return ErrSchedulerClosed
+	default:
+	}
+
 	for range maxWorkerFindRetries {
 		mask := s.idleMask.Load()
 
@@ -89,13 +93,12 @@ func (s *bitmaskStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 		newMask := mask &^ (1 << workerID) // Flip bit to 0 (busy)
 
 		if s.idleMask.CompareAndSwap(mask, newMask) {
-			// Successfully reserved worker, now send to their channel
 			select {
 			case s.workerChans[workerID] <- task:
 				return nil
 			case <-s.quit:
 				// Shutdown signal received, restore the bit and exit
-				s.announceIdle(1 << workerID)
+				s.announceIdle(workerID)
 				return ErrSchedulerClosed
 			}
 		}
@@ -109,22 +112,22 @@ func (s *bitmaskStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	}
 }
 
-// SubmitBatch submits a batch of tasks for execution.
-// The submission is performed in a goroutine for asynchronous delivery and returns immediately.
-// Returns the number of tasks to be submitted (i.e., len(tasks)) and no error.
-// This prevents deadlocks when the queue is smaller than the task batch.
+// SubmitBatch submits a batch of tasks for execution synchronously.
+// Returns the number of tasks successfully submitted and an error if shutdown was signaled during submission.
+// If shutdown occurs mid-batch, returns the count of tasks submitted before shutdown and the error.
 func (s *bitmaskStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		for _, task := range tasks {
-			err := s.Submit(task)
-			if err != nil {
-				return
+	submitted := 0
+	for _, task := range tasks {
+		err := s.Submit(task)
+		if err != nil {
+			if submitted == 0 {
+				return 0, err
 			}
+			return submitted, err
 		}
-	}()
-	return len(tasks), nil
+		submitted++
+	}
+	return submitted, nil
 }
 
 // Worker is the main loop for a worker goroutine. The worker
@@ -144,7 +147,7 @@ func (b *bitmaskStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 	}
 
 	for {
-		b.announceIdle(myBit)
+		b.announceIdle(int(workerID))
 
 		select {
 		case <-ctx.Done():
@@ -156,14 +159,14 @@ func (b *bitmaskStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 			return nil
 
 		case task := <-myChan:
-			if err := b.execute(ctx, task, myBit, executor, h); err != nil {
+			if err := b.execute(ctx, task, workerID, executor, h); err != nil {
 				drain()
 				return err
 			}
 
 		case task := <-b.globalQueue:
 			b.markBusy(myBit)
-			if err := b.execute(ctx, task, myBit, executor, h); err != nil {
+			if err := b.execute(ctx, task, workerID, executor, h); err != nil {
 				drain()
 				return err
 			}
@@ -210,10 +213,10 @@ func (b *bitmaskStrategy[T, R]) drain(
 
 // execute runs the executor on the given task, invokes result handler (h),
 // and manages error handling per config. On failure with ContinueOnErr, re-announces idle.
-func (b *bitmaskStrategy[T, R]) execute(ctx context.Context, task *types.SubmittedTask[T, R], myBit uint64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
+func (b *bitmaskStrategy[T, R]) execute(ctx context.Context, task *types.SubmittedTask[T, R], workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
 	err := executeSubmitted(ctx, task, b.config, executor, h)
 	if err := handleExecutionError(err, b.config.ContinueOnErr, func() {
-		b.announceIdle(myBit)
+		b.announceIdle(int(workerID))
 	}); err != nil {
 		return err
 	}
@@ -221,7 +224,8 @@ func (b *bitmaskStrategy[T, R]) execute(ctx context.Context, task *types.Submitt
 }
 
 // announceIdle sets this worker's bit to 1 (idle) in the mask if not already set.
-func (b *bitmaskStrategy[T, R]) announceIdle(myBit uint64) {
+func (b *bitmaskStrategy[T, R]) announceIdle(workerID int) {
+	myBit := uint64(1) << workerID
 	for {
 		oldMask := b.idleMask.Load()
 		if oldMask&myBit != 0 {
@@ -247,10 +251,8 @@ func (s *bitmaskStrategy[T, R]) markBusy(myBit uint64) {
 	}
 }
 
-// Shutdown gracefully shuts down the bitmask strategy:
-// - Signals all SubmitBatch goroutines to stop early by closing quit.
-// - Waits for all SubmitBatch goroutines to finish.
+// Shutdown gracefully shuts down the bitmask strategy by closing the quit channel.
+// This signals ongoing task submissions to stop.
 func (s *bitmaskStrategy[T, R]) Shutdown() {
 	close(s.quit)
-	s.wg.Wait()
 }
