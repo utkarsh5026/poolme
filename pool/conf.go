@@ -62,6 +62,13 @@ const (
 	// Best for: High-throughput scenarios with many concurrent submitters.
 	// Can be configured as bounded (fixed capacity) or unbounded (dynamic growth).
 	SchedulingMPMC
+
+	// SchedulingBitmask uses a bitmask-based scheduling with per-worker channels.
+	// Uses a 64-bit atomic bitmask to track worker idle/busy state (1 = idle, 0 = busy).
+	// Each worker has its own dedicated channel, with a fallback global queue for overflow.
+	// Best for: Low-latency task dispatch with up to 64 workers, minimal lock contention.
+	// Limited to maximum 64 workers due to bitmask size.
+	SchedulingBitmask
 )
 
 type workerPoolConfig struct {
@@ -372,6 +379,8 @@ func WithPriorityQueue[T any](lessFunc func(a, b T) bool) WorkerPoolOption {
 //   - SchedulingChannel: Simple shared channel (default) - best for general use
 //   - SchedulingWorkStealing: Per-worker queues with work stealing - best for CPU-intensive tasks
 //   - SchedulingPriorityQueue: Priority-based processing - requires WithPriorityQueue
+//   - SchedulingMPMC: Lock-free multi-producer multi-consumer queue - best for high-throughput
+//   - SchedulingBitmask: Bitmask-based with per-worker channels - best for low-latency (max 64 workers)
 //
 // Example:
 //
@@ -483,6 +492,38 @@ func WithUnboundedQueue() MPMCOption {
 	return func(cfg *workerPoolConfig) {
 		cfg.mpmcBounded = false
 		cfg.mpmcCapacity = 0 // Use default initial capacity
+	}
+}
+
+// WithBitmask is a convenience option to enable bitmask-based scheduling.
+// This is equivalent to WithSchedulingStrategy(SchedulingBitmask).
+//
+// Bitmask scheduling provides:
+//   - Ultra-low latency task dispatch using atomic operations
+//   - Per-worker dedicated channels for direct task assignment
+//   - Lock-free worker idle/busy tracking via 64-bit bitmask
+//   - Automatic fallback to global queue when all workers are busy
+//   - Minimal contention and cache-line bouncing
+//
+// Limitations:
+//   - Maximum 64 workers (enforced by 64-bit bitmask)
+//   - If more workers are configured, only first 64 will be used
+//
+// Best for:
+//   - Latency-sensitive applications requiring fast task dispatch
+//   - Workloads with moderate worker counts (≤64)
+//   - Scenarios where direct worker assignment is beneficial
+//   - Systems requiring predictable, low-overhead scheduling
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithWorkerCount(32),
+//	    WithBitmask(),
+//	)
+func WithBitmask() WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.schedulingStrategy = SchedulingBitmask
 	}
 }
 
