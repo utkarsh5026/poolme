@@ -50,6 +50,13 @@ func getAllStrategies(workerCount int) []strategyConfig {
 				}),
 			},
 		},
+		{
+			name: "Bitmask",
+			opts: []WorkerPoolOption{
+				WithWorkerCount(workerCount),
+				WithSchedulingStrategy(SchedulingBitmask),
+			},
+		},
 	}
 }
 
@@ -530,6 +537,13 @@ func TestWorkerPool_Process_HighConcurrency(t *testing.T) {
 				WithPriorityQueue(func(a, b int) bool {
 					return a < b
 				}),
+			},
+		},
+		{
+			name: "Bitmask",
+			opts: []WorkerPoolOption{
+				WithWorkerCount(workerCount),
+				WithSchedulingStrategy(SchedulingBitmask),
 			},
 		},
 	}
