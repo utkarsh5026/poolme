@@ -86,8 +86,7 @@ func TestChannelStrategy_Submit(t *testing.T) {
 	defer s.Shutdown()
 
 	// Create a test task
-	future := types.NewFuture[int, int64]()
-	task := types.NewSubmittedTask(42, 1, future)
+	task := types.NewSubmittedTask[int, int](42, 1, nil)
 
 	// Submit task
 	err := s.Submit(task)
@@ -175,7 +174,7 @@ func TestChannelStrategy_SubmitBatch(t *testing.T) {
 	// Create batch of tasks
 	batchSize := 20
 	tasks := make([]*types.SubmittedTask[int, int], batchSize)
-	for i := 0; i < batchSize; i++ {
+	for i := range batchSize {
 		future := types.NewFuture[int, int64]()
 		tasks[i] = types.NewSubmittedTask(i, int64(i), future)
 	}
@@ -238,23 +237,32 @@ func TestChannelStrategy_SubmitBatchWithShutdown(t *testing.T) {
 	// Shutdown immediately (should stop batch goroutine early)
 	s.Shutdown()
 
-	// Verify all channels are closed
+	// Verify all channels are closed by checking if we can read from them
+	// Closed channels will return immediately with ok=false
 	for i, ch := range s.taskChans {
-		select {
-		case <-ch:
-		default:
-			// Channel is closed or empty
-		}
-
-		// Try to send should panic or block (channel is closed)
-		func() {
+		// Drain any remaining tasks
+		for {
 			select {
-			case ch <- types.NewSubmittedTask(999, 999, types.NewFuture[int, int64]()):
-				t.Errorf("channel %d accepted task after shutdown", i)
+			case _, ok := <-ch:
+				if !ok {
+					// Channel is closed, which is what we expect
+					goto channelClosed
+				}
+				// Continue draining
 			default:
-				// Good - channel is full or closed
+				// No more tasks, but channel might not be closed yet
+				// Try reading one more time with blocking to confirm closure
+				_, ok := <-ch
+				if !ok {
+					goto channelClosed
+				}
+				t.Errorf("channel %d is not closed after shutdown", i)
+				goto nextChan
 			}
-		}()
+		}
+	channelClosed:
+		// Good - channel is closed as expected
+	nextChan:
 	}
 }
 
@@ -297,7 +305,7 @@ func TestChannelStrategy_Worker(t *testing.T) {
 
 	// Submit tasks directly to the worker's channel
 	numTasks := 5
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.taskChans[workerID] <- task
