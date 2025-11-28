@@ -2,48 +2,60 @@ package scheduler
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
 	"github.com/utkarsh5026/poolme/internal/types"
 )
 
+// channelStrategy provides a simple scheduling strategy that distributes tasks
+// to a set of worker-specific channels in a round-robin fashion.
+//
+// Each worker goroutine reads from its own channel to execute submitted tasks.
 type channelStrategy[T any, R any] struct {
-	config    *ProcessorConfig[T, R]
-	taskChans []chan *types.SubmittedTask[T, R]
-	counter   atomic.Int64
-	quit      chan struct{}
-	wg        sync.WaitGroup
+	config    *ProcessorConfig[T, R]            // Processor configuration parameters.
+	taskChans []chan *types.SubmittedTask[T, R] // Per-worker task channels.
+	counter   atomic.Int64                      // Atomic counter for round-robin channel selection.
+	quit      chan struct{}                     // Channel to signal batch goroutines to quit.
+	wg        sync.WaitGroup                    // WaitGroup to wait for running batch submissions.
 }
 
+// newChannelStrategy creates a new instance of channelStrategy.
+// It initializes the required number of task channels (one per worker),
+// using the maximum of runtime.NumCPU() and configured WorkerCount.
 func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrategy[T, R] {
+	n := max(runtime.NumCPU(), conf.WorkerCount)
 	c := &channelStrategy[T, R]{
 		config:    conf,
-		taskChans: make([]chan *types.SubmittedTask[T, R], conf.WorkerCount),
+		taskChans: make([]chan *types.SubmittedTask[T, R], n),
 		quit:      make(chan struct{}),
 	}
 
-	for i := 0; i < conf.WorkerCount; i++ {
+	for i := range n {
 		c.taskChans[i] = make(chan *types.SubmittedTask[T, R], conf.TaskBuffer)
 	}
 
 	return c
 }
 
+// Submit submits a single task to the next worker channel using round-robin scheduling.
+// Returns nil since this operation cannot fail synchronously.
 func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
-	index := s.counter.Add(1) % int64(s.config.WorkerCount)
-	s.taskChans[index] <- task
+	s.taskChans[s.next()] <- task
 	return nil
 }
 
+// SubmitBatch submits a batch of tasks for execution.
+// The addition is performed in a goroutine for asynchronous delivery and returns immediately.
+// Returns the number of tasks submitted (i.e., len(tasks)) and no error.
 func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		for _, task := range tasks {
-			index := s.counter.Add(1) % int64(s.config.WorkerCount)
 			select {
-			case s.taskChans[index] <- task:
+			case s.taskChans[s.next()] <- task:
 			case <-s.quit:
 				return
 			}
@@ -52,6 +64,10 @@ func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) 
 	return len(tasks), nil
 }
 
+// Shutdown gracefully shuts down the channel strategy:
+// - Signals all SubmitBatch goroutines to stop early.
+// - Waits for all SubmitBatch goroutines to finish.
+// - Closes all worker task channels, signaling workers to exit.
 func (s *channelStrategy[T, R]) Shutdown() {
 	close(s.quit) // Signal all SubmitBatch goroutines to stop
 	s.wg.Wait()   // Wait for all SubmitBatch goroutines to finish
@@ -60,6 +76,9 @@ func (s *channelStrategy[T, R]) Shutdown() {
 	}
 }
 
+// Worker runs the worker event loop for the specified workerID.
+// It receives tasks from its dedicated channel and executes them.
+// Properly drains remaining tasks on context cancellation to ensure all submitted tasks are processed.
 func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
 	for {
 		select {
@@ -81,8 +100,15 @@ func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 }
 
 // drain processes any remaining tasks in the channel during context cancellation.
-// This ensures all submitted tasks are processed even when context is cancelled.
-func (s *channelStrategy[T, R]) drain(ctx context.Context, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R], workerID int64) {
+//
+// It drains the worker's channel, executing all tasks until channel is empty or closed.
+// Ensures all submitted tasks are processed even when context is cancelled.
+func (s *channelStrategy[T, R]) drain(
+	ctx context.Context,
+	executor types.ProcessFunc[T, R],
+	h types.ResultHandler[T, R],
+	workerID int64,
+) {
 	for {
 		select {
 		case t, ok := <-s.taskChans[workerID]:
@@ -94,4 +120,9 @@ func (s *channelStrategy[T, R]) drain(ctx context.Context, executor types.Proces
 			return
 		}
 	}
+}
+
+// next returns the next channel index in a round-robin fashion using an atomic counter.
+func (s *channelStrategy[T, R]) next() int64 {
+	return s.counter.Add(1) % int64(len(s.taskChans))
 }

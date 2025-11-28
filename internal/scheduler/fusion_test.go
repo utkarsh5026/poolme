@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,19 +15,37 @@ func createTestTask[T any, R any](input T, id int64) *types.SubmittedTask[T, R] 
 }
 
 func getChannelLength[T any, R any](s *channelStrategy[T, R]) int {
-	return len(s.taskChan)
+	count := 0
+	for _, ch := range s.taskChans {
+		count += len(ch)
+	}
+	return count
 }
 
 func drainChannel[T any, R any](s *channelStrategy[T, R]) int {
-	count := 0
-	for {
-		select {
-		case <-s.taskChan:
-			count++
-		default:
-			return count
-		}
+	var count atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(len(s.taskChans))
+
+	for _, ch := range s.taskChans {
+		go func() {
+			defer wg.Done()
+			var c int64 = 0
+		loop:
+			for {
+				select {
+				case <-ch:
+					c++
+				default:
+					break loop // Breaks out of the for loop
+				}
+			}
+			count.Add(c)
+		}()
 	}
+
+	wg.Wait()
+	return int(count.Load())
 }
 
 func TestNewFusionStrategy(t *testing.T) {
@@ -217,20 +236,18 @@ func TestFusionStrategy_Submit_Concurrency(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 
-		// Submit tasks concurrently
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(start int) {
 				defer wg.Done()
-				for j := 0; j < tasksPerGoroutine; j++ {
+				for j := range tasksPerGoroutine {
 					fs.Submit(createTestTask[int, int](start*tasksPerGoroutine+j, int64(start*tasksPerGoroutine+j)))
 				}
 			}(i)
 		}
 
 		wg.Wait()
-		time.Sleep(200 * time.Millisecond) // Wait for all flushes
+		time.Sleep(200 * time.Millisecond)
 
-		// Verify all tasks were submitted
 		totalSubmitted := drainChannel(underlying)
 		expectedTotal := goroutines * tasksPerGoroutine
 		if totalSubmitted != expectedTotal {
@@ -367,7 +384,7 @@ func TestFusionStrategy_EdgeCases(t *testing.T) {
 		fs := newFusionStrategy(conf, underlying)
 
 		// Submit tasks rapidly but below batch size
-		for i := 0; i < 50; i++ {
+		for i := range 50 {
 			fs.Submit(createTestTask[int, int](i, int64(i)))
 		}
 
@@ -430,7 +447,7 @@ func TestCreateSchedulingStrategy_Fusion(t *testing.T) {
 			FusionBatchSize:    50,
 		}
 
-		strategy, err := CreateSchedulingStrategy[int, int](conf, nil)
+		strategy, err := CreateSchedulingStrategy(conf, nil)
 
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
@@ -529,7 +546,7 @@ func TestCreateSchedulingStrategy_Fusion(t *testing.T) {
 			UseFusion:          false,
 		}
 
-		strategy, err := CreateSchedulingStrategy[int, int](conf, nil)
+		strategy, err := CreateSchedulingStrategy(conf, nil)
 
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
