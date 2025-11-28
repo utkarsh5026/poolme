@@ -47,6 +47,9 @@ func CreateSchedulingStrategy[T, R any](conf *ProcessorConfig[T, R], tasks []*ty
 	case SchedulingMPMC:
 		s = newMPMCStrategy(conf, conf.MpmcBounded, conf.MpmcCapacity)
 
+	case SchedulingBitmask:
+		s = newBitmaskStrategy(conf)
+
 	case SchedulingChannel:
 		fallthrough
 	default:

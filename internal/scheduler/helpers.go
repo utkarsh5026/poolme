@@ -10,6 +10,10 @@ import (
 	"github.com/utkarsh5026/poolme/internal/types"
 )
 
+var (
+	ErrSchedulerClosed error = errors.New("scheduler is closed")
+)
+
 // nextPowerOfTwo returns the next power of 2 >= n
 func nextPowerOfTwo(n int) int {
 	if n <= 0 {
