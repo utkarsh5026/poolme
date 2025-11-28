@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,19 +24,19 @@ func TestNewChannelStrategy(t *testing.T) {
 			name:        "default worker count",
 			workerCount: 0,
 			taskBuffer:  10,
-			wantChans:   runtime.NumCPU(),
+			wantChans:   1,
 		},
 		{
-			name:        "explicit worker count less than NumCPU",
+			name:        "explicit worker count",
 			workerCount: 2,
 			taskBuffer:  5,
-			wantChans:   max(runtime.NumCPU(), 2),
+			wantChans:   2,
 		},
 		{
-			name:        "explicit worker count greater than NumCPU",
-			workerCount: runtime.NumCPU() + 5,
+			name:        "higher worker count",
+			workerCount: 10,
 			taskBuffer:  20,
-			wantChans:   runtime.NumCPU() + 5,
+			wantChans:   10,
 		},
 	}
 

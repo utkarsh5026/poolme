@@ -47,12 +47,10 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 // Submit submits a single task to the next worker channel using round-robin scheduling.
 // Returns nil since this operation cannot fail synchronously.
 func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
-	select {
-	case s.taskChans[s.next(task)] <- task:
-		return nil
-	case <-s.quit:
+	if exit := s.tryToSubmit(s.next(task), task); exit {
 		return context.Canceled
 	}
+	return nil
 }
 
 // SubmitBatch submits a batch of tasks for execution.
@@ -64,25 +62,38 @@ func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) 
 		defer s.wg.Done()
 		for _, task := range tasks {
 			idx := s.next(task)
-			sent, exit := s.sendToChannel(idx, task)
-			if exit {
+			if exit := s.tryToSubmit(idx, task); exit {
 				return
-			}
-			if sent {
-				continue
-			}
-
-			sent = s.submitRoundRobin(int(idx), task)
-			if !sent {
-				select {
-				case s.taskChans[idx] <- task:
-				case <-s.quit:
-					return
-				}
 			}
 		}
 	}()
 	return len(tasks), nil
+}
+
+// tryToSubmit quickly enqueues a task to a worker channel:
+//  1. Attempts a few non-blocking sends to idx via sendToChannel.
+//  2. If not sent, tries other channels round-robin.
+//  3. As a last resort, blocks on idx or exits early if quitting.
+//
+// Returns true if quit signal received, otherwise false.
+func (s *channelStrategy[T, R]) tryToSubmit(idx int64, task *types.SubmittedTask[T, R]) (exit bool) {
+	sent, exit := s.sendToChannel(idx, task)
+	if exit {
+		return true
+	}
+	if sent {
+		return false
+	}
+
+	sent = s.submitRoundRobin(int(idx), task)
+	if !sent {
+		select {
+		case s.taskChans[idx] <- task:
+		case <-s.quit:
+			return true
+		}
+	}
+	return false
 }
 
 // sendToChannel tries to send a task to the channel at index idx.
