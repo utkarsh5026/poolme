@@ -45,7 +45,12 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 // Returns nil since this operation cannot fail synchronously.
 func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	s.taskChans[s.next(task)] <- task
-	return nil
+	select {
+	case s.taskChans[s.next(task)] <- task:
+		return nil
+	case <-s.quit:
+		return context.Canceled
+	}
 }
 
 // SubmitBatch submits a batch of tasks for execution.
