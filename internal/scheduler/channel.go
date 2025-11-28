@@ -19,7 +19,7 @@ type channelStrategy[T any, R any] struct {
 	counter      atomic.Int64                      // Atomic counter for round-robin channel selection.
 	quit         chan struct{}                     // Channel to signal batch goroutines to quit.
 	wg           sync.WaitGroup                    // WaitGroup to wait for running batch submissions.
-	affinityFunc func(t T) (hash string)
+	affinityFunc func(t T) string
 }
 
 // newChannelStrategy creates a new instance of channelStrategy.
@@ -130,12 +130,14 @@ func (s *channelStrategy[T, R]) drain(
 
 // next returns the next channel index in a round-robin fashion using an atomic counter.
 func (s *channelStrategy[T, R]) next(t *types.SubmittedTask[T, R]) int64 {
+	// #nosec G115 -- len(s.taskChans) is bounded by max(NumCPU, WorkerCount), always << math.MaxUint32
+	n := uint32(len(s.taskChans))
 	if s.affinityFunc != nil {
 		key := s.affinityFunc(t.Task)
 		hash := s.fnvHash(key)
-		return int64(hash % uint32(len(s.taskChans)))
+		return int64(hash % n)
 	}
-	return s.counter.Add(1) % int64(len(s.taskChans))
+	return s.counter.Add(1) % int64(n)
 }
 
 // fnvHash computes the FNV-1a hash for the given string key.
