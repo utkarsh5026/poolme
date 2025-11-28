@@ -44,6 +44,7 @@ func calcBackoffDelay(initialDelay time.Duration, attemptNumber int) time.Durati
 //   - beforeTaskStart: Function to be called before each task starts (or nil if not configured).
 //   - onTaskEnd: Function to be called after each task ends (or nil if not configured).
 //   - onRetry: Function to be called on every retry attempt (or nil if not configured).
+//   - affinityFunc: Function to map tasks to affinity keys for worker routing (or nil if not configured).
 //
 // Panics:
 //
@@ -56,6 +57,7 @@ func checkfuncs[T any, R any](
 	beforeTaskStart func(T),
 	onTaskEnd func(T, R, error),
 	onRetry func(T, int, error),
+	affinityFunc func(T) string,
 ) {
 	if cfg.beforeTaskStart != nil {
 		if cfg.beforeTaskStartType != expectedTaskType {
@@ -91,7 +93,17 @@ func checkfuncs[T any, R any](
 		}
 	}
 
-	return beforeTaskStart, onTaskEnd, onRetry
+	if cfg.affinityFunc != nil {
+		if cfg.affinityFuncType != expectedTaskType {
+			panic(fmt.Sprintf("WithAffinity expects task type %s, but pool processes type %s",
+				cfg.affinityFuncType, expectedTaskType))
+		}
+		affinityFunc = func(task T) string {
+			return cfg.affinityFunc(task)
+		}
+	}
+
+	return beforeTaskStart, onTaskEnd, onRetry, affinityFunc
 }
 
 // waitUntil blocks until either the done channel is closed or the timeout is reached.
@@ -149,7 +161,7 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *scheduler.ProcessorConfig
 	expectedTaskType := fmt.Sprintf("%T", zeroT)
 	expectedResultType := fmt.Sprintf("%T", zeroR)
 
-	beforeTaskStart, onTaskEnd, onRetry := checkfuncs[T, R](cfg, expectedTaskType, expectedResultType)
+	beforeTaskStart, onTaskEnd, onRetry, affinityFunc := checkfuncs[T, R](cfg, expectedTaskType, expectedResultType)
 
 	return &scheduler.ProcessorConfig[T, R]{
 		WorkerCount:        cfg.workerCount,
@@ -176,5 +188,6 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *scheduler.ProcessorConfig
 		}(),
 		MpmcBounded:  cfg.mpmcBounded,
 		MpmcCapacity: cfg.mpmcCapacity,
+		AffinityFunc: affinityFunc,
 	}
 }
