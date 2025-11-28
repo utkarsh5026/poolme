@@ -38,8 +38,10 @@ func TestBitmaskStrategy_New(t *testing.T) {
 		if len(strategy.workerChans) != 4 {
 			t.Errorf("expected 4 worker channels, got %d", len(strategy.workerChans))
 		}
-		if cap(strategy.globalQueue) != 10 {
-			t.Errorf("expected global queue capacity 10, got %d", cap(strategy.globalQueue))
+		// Global queue size is max(TaskBuffer, WorkerCount*10)
+		expectedQueueSize := max(10, 4*10) // max(10, 40) = 40
+		if cap(strategy.globalQueue) != expectedQueueSize {
+			t.Errorf("expected global queue capacity %d, got %d", expectedQueueSize, cap(strategy.globalQueue))
 		}
 	})
 
@@ -64,10 +66,11 @@ func TestBitmaskStrategy_New(t *testing.T) {
 
 		strategy := newBitmaskStrategy(conf)
 
-		// All workers should start as idle (mask should be 0)
+		// All workers should start as idle (all bits set for 8 workers)
+		expectedMask := uint64((1 << 8) - 1) // 0xFF (all 8 bits set)
 		mask := strategy.idleMask.Load()
-		if mask != 0 {
-			t.Errorf("expected initial idle mask 0, got %d", mask)
+		if mask != expectedMask {
+			t.Errorf("expected initial idle mask %d (0x%X), got %d (0x%X)", expectedMask, expectedMask, mask, mask)
 		}
 	})
 }

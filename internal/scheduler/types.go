@@ -77,4 +77,7 @@ type ProcessorConfig[T, R any] struct {
 
 	// Maximum batch size before forcing a flush (used when UseFusion is true).
 	FusionBatchSize int
+
+	// Affinity function to map tasks to specific workers (can be nil).
+	AffinityFunc func(t T) (hash string)
 }

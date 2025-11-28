@@ -302,26 +302,21 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 	localQueue := s.workerQueues[workerID]
 	var missCount, globalCounter int
 
+	drain := func() {
+		s.drain(ctx, localQueue, executor, h)
+	}
+
 	for {
 		if globalCounter%10 == 0 {
-			select {
-			case <-ctx.Done():
-				s.drain(ctx, localQueue, executor, h)
-				return ctx.Err()
-			case <-s.quit:
-				s.drain(ctx, localQueue, executor, h)
-				return nil
-			default:
+			if err := s.checkQuit(ctx, drain); err != nil {
+				return err
 			}
 		}
 		globalCounter++
 
 		for range fastCheckCounter {
 			if t := localQueue.PopBack(); t != nil {
-				err := executeSubmitted(ctx, t, s.conf, executor, h)
-				if err := handleExecutionError(err, s.conf.ContinueOnErr, func() {
-					s.drain(ctx, localQueue, executor, h)
-				}); err != nil {
+				if err := handleWithCare(ctx, t, s.conf, executor, h, drain); err != nil {
 					return err
 				}
 				missCount = 0
@@ -330,29 +325,17 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 
 		if s.globalQueue.Len() > 0 {
 			if t := s.globalQueue.PopFront(); t != nil {
-				err := executeSubmitted(ctx, t, s.conf, executor, h)
-				if err := handleExecutionError(err, s.conf.ContinueOnErr, func() {
-					s.drain(ctx, localQueue, executor, h)
-				}); err != nil {
+				if err := handleWithCare(ctx, t, s.conf, executor, h, drain); err != nil {
 					return err
 				}
 				missCount = 0
-
-				batchCount := min(s.globalQueue.Len(), batchStealSize-1)
-				for range batchCount {
-					if task := s.globalQueue.PopFront(); task != nil {
-						localQueue.PushBack(task)
-					}
-				}
+				s.addToLocalBatch(localQueue)
 				continue
 			}
 		}
 
 		if t := s.steal(int(workerID)); t != nil {
-			err := executeSubmitted(ctx, t, s.conf, executor, h)
-			if err := handleExecutionError(err, s.conf.ContinueOnErr, func() {
-				s.drain(ctx, localQueue, executor, h)
-			}); err != nil {
+			if err := handleWithCare(ctx, t, s.conf, executor, h, drain); err != nil {
 				return err
 			}
 			missCount = 0
@@ -361,6 +344,36 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 
 		missCount++
 		s.backoff(missCount)
+	}
+}
+
+// addToLocalBatch moves a batch of tasks from the global shared queue to the worker's local queue.
+// This is a form of local caching that improves locality and reduces contention on the global queue.
+// Up to (batchStealSize-1) tasks are transferred (not including the initial task already consumed).
+// The actual batch count is the smaller of the global queue length or (batchStealSize-1).
+func (s *workSteal[T, R]) addToLocalBatch(localQueue *wsDeque[T, R]) {
+	batchCount := min(s.globalQueue.Len(), batchStealSize-1)
+	for range batchCount {
+		if task := s.globalQueue.PopFront(); task != nil {
+			localQueue.PushBack(task)
+		}
+	}
+}
+
+// checkQuit checks for cancellation signals via context or explicit quit channel.
+// If a cancellation is detected, it drains the worker's local queue to ensure
+// no tasks are abandoned, then returns the appropriate error (ctx.Err() or nil).
+// If no quit condition occurs, it returns nil and work may continue.
+func (s *workSteal[T, R]) checkQuit(ctx context.Context, drainFunc func()) error {
+	select {
+	case <-ctx.Done():
+		drainFunc()
+		return ctx.Err()
+	case <-s.quit:
+		drainFunc()
+		return nil
+	default:
+		return nil
 	}
 }
 
