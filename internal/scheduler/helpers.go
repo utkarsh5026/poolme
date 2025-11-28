@@ -154,3 +154,22 @@ func handleExecutionError(err error, continueOnErr bool, drainFunc func()) error
 
 	return nil
 }
+
+// handleWithCare wraps task execution and error handling for a submitted task.
+// It executes the given task using the provided processor configuration and process function.
+// If an error occurs during execution, it delegates error handling to handleExecutionError,
+// which determines whether to continue processing or stop based on the configuration.
+func handleWithCare[T, R any](
+	ctx context.Context,
+	s *types.SubmittedTask[T, R],
+	conf *ProcessorConfig[T, R],
+	f types.ProcessFunc[T, R],
+	handler types.ResultHandler[T, R],
+	drain func(),
+) error {
+	err := executeSubmitted(ctx, s, conf, f, handler)
+	if err := handleExecutionError(err, conf.ContinueOnErr, drain); err != nil {
+		return err
+	}
+	return nil
+}
