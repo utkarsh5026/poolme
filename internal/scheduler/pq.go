@@ -121,10 +121,14 @@ func (s *priorityQueueStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T
 // Worker is the main loop for worker goroutines using priority queue scheduling.
 // Workers wait for task signals and then batch-process all available tasks in priority order.
 func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
+	drainFunc := func() {
+		s.drain(ctx, executor, h)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			s.drain(ctx, executor, h)
+			drainFunc()
 			return ctx.Err()
 
 		case _, ok := <-s.availableChan:
@@ -143,10 +147,7 @@ func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64
 				if !ok {
 					panic("priorityQueueStrategy.Worker: invalid type assertion")
 				}
-				err := executeSubmitted(ctx, task, s.conf, executor, h)
-				if err := handleExecutionError(err, s.conf.ContinueOnErr, func() {
-					s.drain(ctx, executor, h)
-				}); err != nil {
+				if err := handleWithCare(ctx, task, s.conf, executor, h, drainFunc); err != nil {
 					return err
 				}
 			}

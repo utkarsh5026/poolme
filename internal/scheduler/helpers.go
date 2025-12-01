@@ -165,11 +165,23 @@ func handleWithCare[T, R any](
 	conf *ProcessorConfig[T, R],
 	f types.ProcessFunc[T, R],
 	handler types.ResultHandler[T, R],
-	drain func(),
+	drainFunc func(),
 ) error {
-	err := executeSubmitted(ctx, s, conf, f, handler)
-	if err := handleExecutionError(err, conf.ContinueOnErr, drain); err != nil {
+	result, err := executeTask(ctx, conf, s.Task, f)
+	handler(s, types.NewResult(result, s.Id, err))
+
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		drainFunc()
 		return err
 	}
+
+	if !conf.ContinueOnErr {
+		return err
+	}
+
 	return nil
 }
