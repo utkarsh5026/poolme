@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"github.com/utkarsh5026/poolme/internal/types"
@@ -21,6 +22,7 @@ type channelStrategy[T any, R any] struct {
 	counter      atomic.Int64                      // Atomic counter for round-robin channel selection.
 	quit         chan struct{}                     // Channel to signal task submissions to stop.
 	affinityFunc func(t T) string
+	submitWg     sync.WaitGroup // WaitGroup to track in-flight submissions
 }
 
 // newChannelStrategy creates a new instance of channelStrategy.
@@ -45,6 +47,15 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 // Submit submits a single task to the next worker channel using round-robin scheduling.
 // Returns nil since this operation cannot fail synchronously.
 func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
+	select {
+	case <-s.quit:
+		return context.Canceled
+	default:
+	}
+	s.submitWg.Add(1)
+
+	defer s.submitWg.Done()
+
 	if exit := s.tryToSubmit(s.next(task), task); exit {
 		return context.Canceled
 	}
@@ -55,6 +66,15 @@ func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 // Returns the number of tasks successfully submitted and an error if shutdown was signaled during submission.
 // If shutdown occurs mid-batch, returns the count of tasks submitted before shutdown and context.Canceled error.
 func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
+	select {
+	case <-s.quit:
+		return 0, context.Canceled
+	default:
+	}
+	s.submitWg.Add(1)
+
+	defer s.submitWg.Done()
+
 	submitted := 0
 	for _, task := range tasks {
 		idx := s.next(task)
@@ -106,7 +126,6 @@ func (s *channelStrategy[T, R]) sendToChannel(idx int64, task *types.SubmittedTa
 		case <-s.quit:
 			return true, true
 		default:
-			// taskChans[idx] is full; try again
 		}
 	}
 	return false, false
@@ -133,9 +152,12 @@ func (s *channelStrategy[T, R]) submitRoundRobin(idx int, task *types.SubmittedT
 
 // Shutdown gracefully shuts down the channel strategy:
 // - Signals ongoing task submissions to stop.
+// - Waits for all in-flight submissions to complete.
 // - Closes all worker task channels, signaling workers to exit.
 func (s *channelStrategy[T, R]) Shutdown() {
-	close(s.quit) // Signal ongoing submissions to stop
+	close(s.quit)     // Signal ongoing submissions to stop
+	s.submitWg.Wait() // Wait for all in-flight submissions to complete
+
 	for _, ch := range s.taskChans {
 		close(ch)
 	}
