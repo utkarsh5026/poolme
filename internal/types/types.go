@@ -1,7 +1,10 @@
 package types
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"strconv"
 	"sync"
 )
 
@@ -48,6 +51,22 @@ func NewSubmittedTask[T any, R any](task T, id int64, future *Future[R, int64]) 
 		Id:     id,
 		Future: future,
 	}
+}
+
+func (st *SubmittedTask[T, R]) String() string {
+	var buff bytes.Buffer
+	_, _ = buff.WriteString("SubmittedTask { ")
+	_, _ = buff.WriteString("Id: ")
+
+	idStr := strconv.FormatInt(st.Id, 10)
+	_, _ = buff.WriteString(idStr)
+	_, _ = buff.WriteString(" }")
+
+	_, _ = buff.WriteString("Task: ")
+	_, _ = buff.WriteString(fmt.Sprintf("%v", st.Task))
+	_, _ = buff.WriteString(" }")
+
+	return buff.String()
 }
 
 // Future represents a value that will be available in the future after asynchronous task processing.
