@@ -43,6 +43,15 @@ func getAllStrategies(workerCount int) []strategyConfig {
 			},
 		},
 		{
+			name: "SkipList",
+			opts: []WorkerPoolOption{
+				WithWorkerCount(workerCount),
+				WithSkipList(func(a, b int) bool {
+					return a < b
+				}),
+			},
+		},
+		{
 			name: "Bitmask",
 			opts: []WorkerPoolOption{
 				WithWorkerCount(workerCount),
