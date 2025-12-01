@@ -1,0 +1,5 @@
+{
+  "go.buildTags": "debug",
+  "go.testFlags": ["-v"],
+  "go.coverOnTestPackage": false
+}
