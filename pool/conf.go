@@ -69,6 +69,13 @@ const (
 	// Best for: Low-latency task dispatch with up to 64 workers, minimal lock contention.
 	// Limited to maximum 64 workers due to bitmask size.
 	SchedulingBitmask
+
+	// SchedulingSkipList uses a skip list-based priority queue for task scheduling.
+	// Provides O(log n) insertion and deletion with better concurrency than heap-based queues.
+	// Uses lock-free reads and optimized random level generation for high performance.
+	// Best for: Priority-based workloads with high concurrent task submission.
+	// Requires WithPriorityQueue or WithSkipList to be set with a priority function.
+	SchedulingSkipList
 )
 
 type workerPoolConfig struct {
@@ -528,6 +535,58 @@ func WithUnboundedQueue() MPMCOption {
 func WithBitmask() WorkerPoolOption {
 	return func(cfg *workerPoolConfig) {
 		cfg.schedulingStrategy = SchedulingBitmask
+	}
+}
+
+// WithSkipList configures the pool to use a skip list-based priority queue.
+// This is an alternative to the heap-based priority queue that provides better
+// concurrency characteristics with O(log n) insertion and deletion.
+//
+// Skip list scheduling provides:
+//   - Better concurrent performance than heap-based queues
+//   - Lock-free reads with cached priority values
+//   - Optimized random level generation using bit manipulation
+//   - Task batching for same-priority tasks
+//   - Lower contention under high concurrent submission
+//
+// The lessFunc should return true if task 'a' has higher priority than task 'b'.
+// This allows flexible priority ordering based on any task properties.
+//
+// Best for:
+//   - High-throughput priority-based workloads
+//   - Scenarios with many concurrent task submitters
+//   - Workloads where priority distribution is relatively uniform
+//   - Systems requiring predictable priority queue performance
+//
+// Example (lower values have higher priority):
+//
+//	type Task struct { Priority int }
+//	pool := NewWorkerPool[Task, string](
+//	    WithSkipList(func(a, b Task) bool {
+//	        return a.Priority < b.Priority
+//	    }),
+//	)
+//
+// Example (earlier deadlines have higher priority):
+//
+//	type Task struct { Deadline time.Time }
+//	pool := NewWorkerPool[Task, string](
+//	    WithSkipList(func(a, b Task) bool {
+//	        return a.Deadline.Before(b.Deadline)
+//	    }),
+//	)
+func WithSkipList[T any](lessFunc func(a, b T) bool) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.usePq = true
+		cfg.schedulingStrategy = SchedulingSkipList
+		cfg.lessFunc = func(a, b any) bool {
+			ta, okA := a.(T)
+			tb, okB := b.(T)
+			if okA && okB {
+				return lessFunc(ta, tb)
+			}
+			return false
+		}
 	}
 }
 

@@ -18,6 +18,7 @@ const (
 	SchedulingPriorityQueue
 	SchedulingMPMC
 	SchedulingBitmask
+	SchedulingSkipList
 )
 
 // processorConfig holds all configuration for a pool of workers and task scheduling.

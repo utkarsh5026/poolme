@@ -44,6 +44,12 @@ func CreateSchedulingStrategy[T, R any](conf *ProcessorConfig[T, R], tasks []*ty
 		}
 		s = newPriorityQueueStrategy(conf, tasks)
 
+	case SchedulingSkipList:
+		if conf.LessFunc == nil {
+			return nil, errors.New("skip list enabled but no comparison function provided")
+		}
+		s = newSlStrategy(conf, tasks)
+
 	case SchedulingMPMC:
 		s = newMPMCStrategy(conf, conf.MpmcBounded, conf.MpmcCapacity)
 
