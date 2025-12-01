@@ -18,14 +18,15 @@ const (
 	batchStealSize            = 4   // Steal multiple tasks at once
 )
 
+// dequeBuffer holds the slice and the mask together.
+// This ensures that when a stealer loads the buffer, the mask matches the slice capacity.
+type dequeBuffer[T, R any] struct {
+	ring []*types.SubmittedTask[T, R]
+	mask uint64
+}
+
 // wsDeque implements a lock-free work-stealing deque (double-ended queue) optimized for
 // concurrent access patterns in work-stealing schedulers.
-//
-// Design principles:
-//   - Lock-free: Uses atomic operations instead of mutexes for better performance
-//   - Cache-line padding: Prevents false sharing between head and tail indices
-//   - Dynamic growth: Automatically doubles capacity when full
-//   - Ring buffer: Uses bitwise AND for fast modulo operations (capacity must be power of 2)
 //
 // Concurrency model:
 //   - The tail is modified only by the owner worker (single writer)
@@ -34,16 +35,9 @@ const (
 //
 // This implementation is based on the Chase-Lev work-stealing deque algorithm,
 // widely used in Go's runtime scheduler, Java's ForkJoinPool, and other modern schedulers.
-//
-// References:
-//   - "Dynamic Circular Work-Stealing Deque" by Chase and Lev (2005)
-//   - Go runtime scheduler: runtime/proc.go
 type wsDeque[T, R any] struct {
-	// Ring buffer of tasks
-	ring atomic.Pointer[[]*types.SubmittedTask[T, R]]
-
-	// Mask for fast modulo (capacity - 1)
-	mask uint64
+	// state holds the atomic pointer to the current consistent snapshot.
+	buffer atomic.Pointer[dequeBuffer[T, R]]
 
 	// Head index - modified by stealers (other workers)
 	// Padded to prevent false sharing
@@ -54,9 +48,6 @@ type wsDeque[T, R any] struct {
 	// Tail index - modified only by owner worker
 	// Uses atomic operations to ensure visibility to stealers reading in PopFront
 	tail atomic.Int64
-
-	// Capacity (power of 2)
-	capacity uint64
 }
 
 func newWSDeque[T, R any](capacity int) *wsDeque[T, R] {
@@ -67,13 +58,12 @@ func newWSDeque[T, R any](capacity int) *wsDeque[T, R] {
 	capacity = nextPowerOfTwo(capacity)
 	ring := make([]*types.SubmittedTask[T, R], capacity)
 
-	// Safe conversion: capacity is guaranteed to be positive after validation and nextPowerOfTwo
-	dq := &wsDeque[T, R]{
-		mask:     uint64(capacity - 1), // #nosec G115 -- capacity is validated positive, no overflow possible
-		capacity: uint64(capacity),     // #nosec G115 -- capacity is validated positive, no overflow possible
-	}
+	dq := &wsDeque[T, R]{}
 
-	dq.ring.Store(&ring)
+	dq.buffer.Store(&dequeBuffer[T, R]{
+		ring: ring,
+		mask: uint64(capacity - 1), // #nosec G115 -- capacity is validated positive, no overflow possible
+	})
 	return dq
 }
 
@@ -92,42 +82,35 @@ func newWSDeque[T, R any](capacity int) *wsDeque[T, R] {
 func (w *wsDeque[T, R]) PushBack(t *types.SubmittedTask[T, R]) {
 	tail := w.tail.Load()
 	head := w.head.Load()
-	ring := *w.ring.Load()
+	ringBuf := w.buffer.Load()
+	ring := ringBuf.ring
 
 	// #nosec G115 -- intentional conversion for capacity check, tail-head is safe to convert
-	if uint64(tail-head) >= w.capacity {
+	if uint64(tail-head) >= ringBuf.mask {
 		ring = w.grow(head, tail)
 	}
 
-	ring[tail&int64(w.mask)] = t // #nosec G115 -- intentional conversion for ring indexing with wraparound
+	ring[tail&int64(ringBuf.mask)] = t // #nosec G115 -- intentional conversion for ring indexing with wraparound
 	w.tail.Store(tail + 1)
 }
 
 // grow doubles the capacity of the deque and copies existing tasks to the new buffer.
-// This is called automatically by PushBack when the deque is full.
-//
-// Parameters:
-//   - head: Current head index
-//   - tail: Current tail index
-//
-// Returns:
-//   - The newly allocated ring buffer
-//
-// Note: This operation is not thread-safe and should only be called by the owner worker.
 func (w *wsDeque[T, R]) grow(head, tail int64) []*types.SubmittedTask[T, R] {
-	old := *w.ring.Load()
-	oldCap := w.capacity
+	old := *w.buffer.Load()
+	oldCap := len(old.ring)
 
 	newCap := oldCap << 1
 	newRing := make([]*types.SubmittedTask[T, R], newCap)
 
 	for i := head; i < tail; i++ {
-		newRing[i&int64(newCap-1)] = old[i&int64(oldCap-1)] // #nosec G115 -- intentional conversion for ring indexing
+		newRing[i&int64(newCap-1)] = old.ring[i&int64(oldCap-1)] // #nosec G115 -- intentional conversion for ring indexing
 	}
 
-	w.ring.Store(&newRing)
-	w.capacity = newCap
-	w.mask = newCap - 1
+	newBuf := &dequeBuffer[T, R]{
+		ring: newRing,
+		mask: uint64(newCap - 1),
+	}
+	w.buffer.Store(newBuf)
 	return newRing
 }
 
@@ -139,10 +122,6 @@ func (w *wsDeque[T, R]) grow(head, tail int64) []*types.SubmittedTask[T, R] {
 //
 // Returns:
 //   - The task from the back of the deque, or nil if the deque is empty
-//
-// Race handling:
-//   - If the deque has only one element and a concurrent steal occurs, the CAS
-//     operation ensures only one party successfully claims the task
 func (w *wsDeque[T, R]) PopBack() *types.SubmittedTask[T, R] {
 	tail := w.tail.Load() - 1
 	w.tail.Store(tail)
@@ -153,9 +132,10 @@ func (w *wsDeque[T, R]) PopBack() *types.SubmittedTask[T, R] {
 		return nil
 	}
 
-	ring := *w.ring.Load()
-	t := ring[tail&int64(w.mask)] // #nosec G115 -- intentional conversion for ring indexing with wraparound
+	r := w.buffer.Load()
+	t := r.ring[tail&int64(r.mask)] // #nosec G115 -- intentional conversion for ring indexing with wraparound
 
+	// compete the pop
 	if head == tail {
 		if !w.head.CompareAndSwap(head, head+1) {
 			t = nil
@@ -179,8 +159,8 @@ func (w *wsDeque[T, R]) PopFront() *types.SubmittedTask[T, R] {
 		return nil
 	}
 
-	ring := *w.ring.Load()
-	t := ring[head&int64(w.mask)] // #nosec G115 -- intentional conversion for ring indexing with wraparound
+	ringBuf := w.buffer.Load()
+	t := ringBuf.ring[head&int64(ringBuf.mask)] // #nosec G115 -- intentional conversion for ring indexing with wraparound
 
 	if !w.head.CompareAndSwap(head, head+1) {
 		return nil
@@ -209,9 +189,10 @@ func (w *wsDeque[T, R]) Len() int {
 // modern work-stealing schedulers (Java ForkJoinPool, .NET TPL, etc.)
 type workSteal[T any, R any] struct {
 	globalQueue               *wsDeque[T, R]
+	glock                     sync.Mutex
 	workerQueues              []*wsDeque[T, R]
 	conf                      *ProcessorConfig[T, R]
-	nextWorker, stealSeed     atomic.Uint64 // Round-robin counter for task distribution
+	stealSeed                 atomic.Uint64 // Round-robin counter for task distribution
 	workerCount, maxLocalSize int
 	quit                      chan struct{}
 	wakeup                    chan struct{} // Buffered channel to wake sleeping workers
@@ -241,52 +222,31 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConf
 // 2. If local queue is above threshold, add to global queue (load balancing)
 // 3. This gives both cache locality AND prevents queue buildup
 func (s *workSteal[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
-	workerID := int(s.nextWorker.Add(1) % uint64(s.workerCount)) // #nosec G115 -- workerCount is always positive
-	local := s.workerQueues[workerID]
-
-	if local.Len() < localQueueThreshold {
-		local.PushBack(task)
-	} else {
-		s.globalQueue.PushBack(task)
-	}
+	s.glock.Lock()
+	s.globalQueue.PushBack(task)
+	s.glock.Unlock()
 
 	select {
 	case s.wakeup <- struct{}{}:
 	default:
 	}
-
 	return nil
 }
 
 // SubmitBatch pre-distributes tasks across worker queues for optimal load balancing.
 // This eliminates per-task submission overhead and gives workers balanced starting queues.
 func (s *workSteal[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
-	n := len(tasks)
-	if n == 0 {
+	if len(tasks) == 0 {
 		return 0, nil
 	}
 
-	tasksPerWorker := n / s.workerCount
-	remainder := n % s.workerCount
-
-	taskIndex := 0
-
-	for i := 0; i < s.workerCount && taskIndex < n; i++ {
-		localQueue := s.workerQueues[i]
-
-		tcount := tasksPerWorker
-		if i < remainder {
-			tcount++
-		}
-
-		for j := 0; j < tcount && taskIndex < n; j++ {
-			localQueue.PushBack(tasks[taskIndex])
-			taskIndex++
-		}
+	s.glock.Lock()
+	for _, t := range tasks {
+		s.globalQueue.PushBack(t)
 	}
+	s.glock.Unlock()
 
-	// Wake up workers (one per worker that received tasks, non-blocking)
-	workersToWake := min(s.workerCount, (taskIndex+tasksPerWorker)/max(tasksPerWorker, 1))
+	workersToWake := min(s.workerCount, (len(tasks)+1)/2)
 	for range workersToWake {
 		select {
 		case s.wakeup <- struct{}{}:
@@ -294,7 +254,7 @@ func (s *workSteal[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, 
 		}
 	}
 
-	return taskIndex, nil
+	return len(tasks), nil
 }
 
 // worker is the main loop for each worker goroutine.
@@ -315,7 +275,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 	}
 
 	for {
-		if globalCounter%10 == 0 {
+		if globalCounter%64 == 0 {
 			if err := s.checkQuit(ctx, drain); err != nil {
 				return err
 			}
@@ -328,6 +288,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 					return err
 				}
 				missCount = 0
+				continue
 			}
 		}
 
@@ -337,7 +298,12 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 					return err
 				}
 				missCount = 0
-				s.addToLocalBatch(localQueue)
+				batchCount := min(s.globalQueue.Len(), batchStealSize-1)
+				for range batchCount {
+					if task := s.globalQueue.PopFront(); task != nil {
+						localQueue.PushBack(task)
+					}
+				}
 				continue
 			}
 		}
@@ -359,20 +325,9 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 			missCount = 0
 			continue
 		default:
-			s.backoff(missCount)
-		}
-	}
-}
-
-// addToLocalBatch moves a batch of tasks from the global shared queue to the worker's local queue.
-// This is a form of local caching that improves locality and reduces contention on the global queue.
-// Up to (batchStealSize-1) tasks are transferred (not including the initial task already consumed).
-// The actual batch count is the smaller of the global queue length or (batchStealSize-1).
-func (s *workSteal[T, R]) addToLocalBatch(localQueue *wsDeque[T, R]) {
-	batchCount := min(s.globalQueue.Len(), batchStealSize-1)
-	for range batchCount {
-		if task := s.globalQueue.PopFront(); task != nil {
-			localQueue.PushBack(task)
+			if quit := s.backoff(missCount); quit {
+				return nil
+			}
 		}
 	}
 }
@@ -388,7 +343,7 @@ func (s *workSteal[T, R]) checkQuit(ctx context.Context, drainFunc func()) error
 		return ctx.Err()
 	case <-s.quit:
 		drainFunc()
-		return nil
+		return ErrSchedulerClosed
 	default:
 		return nil
 	}
@@ -446,12 +401,12 @@ func (s *workSteal[T, R]) steal(thiefID int) *types.SubmittedTask[T, R] {
 
 // backoff implements an adaptive exponential backoff strategy for idle workers.
 // This prevents busy-waiting while maintaining responsiveness.
-func (s *workSteal[T, R]) backoff(missCount int) {
+func (s *workSteal[T, R]) backoff(missCount int) (quit bool) {
 	switch {
 	case missCount <= 20:
 		// Active spinning - keep checking aggressively
 		// This helps with bursty workloads where new tasks arrive quickly
-		return
+		return false
 
 	case missCount <= 30:
 		// Yield: give other goroutines a chance to run
@@ -469,16 +424,18 @@ func (s *workSteal[T, R]) backoff(missCount int) {
 			sleepTime = 5 * time.Millisecond
 		}
 
-		// Use select to make sleep interruptible by wakeup or quit signal
 		select {
 		case <-s.wakeup:
 			// Woken up by new work arriving
 		case <-s.quit:
 			// Shutting down
+			return true
 		case <-time.After(sleepTime):
 			// Normal timeout
 		}
 	}
+
+	return false
 }
 
 // drain processes any remaining tasks in the local and global queues during shutdown.
