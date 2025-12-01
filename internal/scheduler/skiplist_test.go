@@ -34,9 +34,9 @@ func TestSkipList_New(t *testing.T) {
 		sl := newSkipList[intTask, int](lessFuncInt)
 
 		// Test that we can get an item from the pool
-		updatePtr := sl.updatePool.Get().(*[]*slNode[intTask, int])
-		if updatePtr == nil {
-			t.Error("expected non-nil update array from pool")
+		updatePtr, ok := sl.updatePool.Get().(*[]*slNode[intTask, int])
+		if !ok || updatePtr == nil {
+			t.Fatal("expected non-nil update array from pool")
 		}
 		if len(*updatePtr) != defaultMaxLevel {
 			t.Errorf("expected update array length %d, got %d", defaultMaxLevel, len(*updatePtr))

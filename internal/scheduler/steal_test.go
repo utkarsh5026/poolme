@@ -122,6 +122,7 @@ func TestWSDeque_PopBack(t *testing.T) {
 	popped := dq.PopBack()
 	if popped == nil {
 		t.Fatal("PopBack returned nil")
+		return
 	}
 	if popped.Task != 42 {
 		t.Errorf("expected task 42, got %d", popped.Task)
@@ -144,6 +145,7 @@ func TestWSDeque_PopBack(t *testing.T) {
 		popped := dq.PopBack()
 		if popped == nil {
 			t.Fatalf("PopBack returned nil at index %d", i)
+			return
 		}
 		if popped.Task != tasks[i].Task {
 			t.Errorf("expected task %d, got %d", tasks[i].Task, popped.Task)

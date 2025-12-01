@@ -88,7 +88,10 @@ func (sl *skipList[T, R]) Push(task *types.SubmittedTask[T, R]) {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
 
-	updatePtr := sl.updatePool.Get().(*[]*slNode[T, R])
+	updatePtr, ok := sl.updatePool.Get().(*[]*slNode[T, R])
+	if !ok {
+		panic("skiplist: invalid type from updatePool")
+	}
 	update := *updatePtr
 	defer func() {
 		for i := range update {
@@ -155,7 +158,10 @@ func (sl *skipList[T, R]) Len() int {
 }
 
 func (sl *skipList[T, R]) removeNodeUnsafe(node *slNode[T, R]) {
-	updatePtr := sl.updatePool.Get().(*[]*slNode[T, R])
+	updatePtr, ok := sl.updatePool.Get().(*[]*slNode[T, R])
+	if !ok {
+		panic("skiplist: invalid type from updatePool")
+	}
 	update := *updatePtr
 	defer func() {
 		for i := range update {
