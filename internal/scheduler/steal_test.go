@@ -445,14 +445,6 @@ func TestNewWorkStealingStrategy(t *testing.T) {
 			if s.quit == nil {
 				t.Error("quit channel is nil")
 			}
-
-			if s.wakeup == nil {
-				t.Error("wakeup channel is nil")
-			}
-
-			if cap(s.wakeup) != tt.workerCount {
-				t.Errorf("expected wakeup channel capacity %d, got %d", tt.workerCount, cap(s.wakeup))
-			}
 		})
 	}
 }
@@ -481,14 +473,6 @@ func TestWorkSteal_Submit(t *testing.T) {
 
 	if totalTasks != 1 {
 		t.Errorf("expected 1 task in queues, got %d", totalTasks)
-	}
-
-	// Verify wakeup signal was sent
-	select {
-	case <-s.wakeup:
-		// Good - wakeup signal received
-	case <-time.After(100 * time.Millisecond):
-		t.Error("no wakeup signal received")
 	}
 }
 
@@ -927,76 +911,6 @@ func TestWorkSteal_StealFromEmptyQueues(t *testing.T) {
 	}
 }
 
-// TestWorkSteal_Backoff tests the adaptive backoff mechanism.
-func TestWorkSteal_Backoff(t *testing.T) {
-	conf := &ProcessorConfig[int, int]{
-		WorkerCount: 2,
-	}
-
-	s := newWorkStealingStrategy(256, conf)
-	defer s.Shutdown()
-
-	tests := []struct {
-		name      string
-		missCount int
-		wantQuit  bool
-	}{
-		{
-			name:      "active spinning",
-			missCount: 10,
-			wantQuit:  false,
-		},
-		{
-			name:      "yield phase",
-			missCount: 25,
-			wantQuit:  false,
-		},
-		{
-			name:      "sleep phase",
-			missCount: 50,
-			wantQuit:  false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			start := time.Now()
-			quit := s.backoff(tt.missCount)
-			elapsed := time.Since(start)
-
-			if quit != tt.wantQuit {
-				t.Errorf("expected quit=%v, got %v", tt.wantQuit, quit)
-			}
-
-			t.Logf("Backoff with missCount=%d took %v", tt.missCount, elapsed)
-
-			// Verify sleep phase actually sleeps
-			if tt.missCount > 30 && elapsed < time.Microsecond {
-				t.Error("expected some delay in sleep phase")
-			}
-		})
-	}
-}
-
-// TestWorkSteal_BackoffQuit tests backoff quit signal.
-func TestWorkSteal_BackoffQuit(t *testing.T) {
-	conf := &ProcessorConfig[int, int]{
-		WorkerCount: 2,
-	}
-
-	s := newWorkStealingStrategy(256, conf)
-
-	// Close quit channel
-	close(s.quit)
-
-	// Backoff should detect quit signal
-	quit := s.backoff(50)
-
-	if !quit {
-		t.Error("expected backoff to return true when quit channel is closed")
-	}
-}
-
 // TestWorkSteal_Drain tests draining queues during shutdown.
 func TestWorkSteal_Drain(t *testing.T) {
 	conf := &ProcessorConfig[int, int]{
@@ -1081,32 +995,6 @@ func TestWorkSteal_Shutdown(t *testing.T) {
 	default:
 		t.Error("quit channel was not closed")
 	}
-
-	// Verify wakeup channel is closed by draining any buffered values
-	// then checking if it's closed
-	drained := 0
-	for {
-		select {
-		case _, ok := <-s.wakeup:
-			if !ok {
-				// Channel is closed, which is what we want
-				return
-			}
-			drained++
-			if drained > 100 {
-				t.Error("wakeup channel is not closed after draining 100 values")
-				return
-			}
-		default:
-			// No more buffered values, but channel should be closed
-			// Try one more read which should return immediately with ok=false
-			_, ok := <-s.wakeup
-			if ok {
-				t.Error("wakeup channel is still open after draining")
-			}
-			return
-		}
-	}
 }
 
 // TestWorkSteal_ConcurrentSubmit tests concurrent task submission.
@@ -1154,14 +1042,14 @@ func TestWorkSteal_ConcurrentSubmit(t *testing.T) {
 
 // TestWorkSteal_MultipleWorkersIntegration tests multiple workers running concurrently.
 func TestWorkSteal_MultipleWorkersIntegration(t *testing.T) {
-	numWorkers := 4
+	numWorkers := 16
 	conf := &ProcessorConfig[int, int]{
 		WorkerCount:   numWorkers,
 		MaxAttempts:   1,
 		ContinueOnErr: true,
 	}
 
-	s := newWorkStealingStrategy[int, int](256, conf)
+	s := newWorkStealingStrategy(256, conf)
 
 	ctx := context.Background()
 
@@ -1190,7 +1078,7 @@ func TestWorkSteal_MultipleWorkersIntegration(t *testing.T) {
 	// Start workers
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
-	for i := 0; i < numWorkers; i++ {
+	for i := range numWorkers {
 		workerID := int64(i)
 		go func(id int64) {
 			defer wg.Done()
@@ -1199,8 +1087,8 @@ func TestWorkSteal_MultipleWorkersIntegration(t *testing.T) {
 	}
 
 	// Submit many tasks
-	numTasks := 200
-	for i := 0; i < numTasks; i++ {
+	numTasks := 20000
+	for i := range numTasks {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.Submit(task)
@@ -1276,7 +1164,7 @@ func TestWorkSteal_StealingUnderLoad(t *testing.T) {
 	// Submit all tasks to one worker to force stealing
 	numTasks := 100
 	targetWorker := 0
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.workerQueues[targetWorker].PushBack(task)
@@ -1447,7 +1335,7 @@ func BenchmarkWorkSteal_Steal(b *testing.B) {
 		WorkerCount: 4,
 	}
 
-	s := newWorkStealingStrategy[int, int](256, conf)
+	s := newWorkStealingStrategy(256, conf)
 	defer s.Shutdown()
 
 	for i := 0; i < len(s.workerQueues); i++ {

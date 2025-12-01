@@ -5,7 +5,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/utkarsh5026/poolme/internal/types"
 )
@@ -194,8 +193,7 @@ type workSteal[T any, R any] struct {
 	conf                      *ProcessorConfig[T, R]
 	stealSeed                 atomic.Uint64 // Round-robin counter for task distribution
 	workerCount, maxLocalSize int
-	quit                      chan struct{}
-	wakeup                    chan struct{} // Buffered channel to wake sleeping workers
+	quit                      chan signal
 }
 
 func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConfig[T, R]) *workSteal[T, R] {
@@ -203,8 +201,7 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConf
 	w := &workSteal[T, R]{
 		globalQueue:  newWSDeque[T, R](maxLocalSize),
 		maxLocalSize: maxLocalSize,
-		quit:         make(chan struct{}),
-		wakeup:       make(chan struct{}, n), // Buffered to wake multiple workers without blocking
+		quit:         make(chan signal),
 		workerQueues: make([]*wsDeque[T, R], n),
 		workerCount:  n,
 		conf:         conf,
@@ -225,11 +222,6 @@ func (s *workSteal[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	s.glock.Lock()
 	s.globalQueue.PushBack(task)
 	s.glock.Unlock()
-
-	select {
-	case s.wakeup <- struct{}{}:
-	default:
-	}
 	return nil
 }
 
@@ -245,15 +237,6 @@ func (s *workSteal[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, 
 		s.globalQueue.PushBack(t)
 	}
 	s.glock.Unlock()
-
-	workersToWake := min(s.workerCount, (len(tasks)+1)/2)
-	for range workersToWake {
-		select {
-		case s.wakeup <- struct{}{}:
-		default:
-		}
-	}
-
 	return len(tasks), nil
 }
 
@@ -292,20 +275,20 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 			}
 		}
 
-		if s.globalQueue.Len() > 0 {
-			if t := s.globalQueue.PopFront(); t != nil {
-				if err := executeTask(t); err != nil {
-					return err
-				}
-				missCount = 0
-				batchCount := min(s.globalQueue.Len(), batchStealSize-1)
-				for range batchCount {
-					if task := s.globalQueue.PopFront(); task != nil {
-						localQueue.PushBack(task)
-					}
-				}
-				continue
+		if t := s.globalQueue.PopFront(); t != nil {
+			if err := executeTask(t); err != nil {
+				return err
 			}
+			missCount = 0
+
+			for range batchStealSize - 1 {
+				if task := s.globalQueue.PopFront(); task != nil {
+					localQueue.PushBack(task)
+				} else {
+					break
+				}
+			}
+			continue
 		}
 
 		if t := s.steal(int(workerID)); t != nil {
@@ -317,18 +300,19 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 		}
 
 		missCount++
-
-		// Check for wakeup signal before sleeping
-		select {
-		case <-s.wakeup:
-			// New work available, reset miss count and continue
-			missCount = 0
+		switch {
+		case missCount <= 50:
+			// Active spinning - keep checking aggressively under high load
+			// Increased threshold to handle high contention scenarios better
 			continue
+
 		default:
-			if quit := s.backoff(missCount); quit {
-				return nil
-			}
+			// Yield: give other goroutines a chance to run
+			// runtime.Gosched() tells the scheduler to pause this goroutine
+			// and run other goroutines before resuming
+			runtime.Gosched()
 		}
+
 	}
 }
 
@@ -399,45 +383,6 @@ func (s *workSteal[T, R]) steal(thiefID int) *types.SubmittedTask[T, R] {
 	return nil
 }
 
-// backoff implements an adaptive exponential backoff strategy for idle workers.
-// This prevents busy-waiting while maintaining responsiveness.
-func (s *workSteal[T, R]) backoff(missCount int) (quit bool) {
-	switch {
-	case missCount <= 20:
-		// Active spinning - keep checking aggressively
-		// This helps with bursty workloads where new tasks arrive quickly
-		return false
-
-	case missCount <= 30:
-		// Yield: give other goroutines a chance to run
-		// runtime.Gosched() tells the scheduler to pause this goroutine
-		// and run other goroutines before resuming
-		runtime.Gosched()
-
-	default:
-		sleepTime := 50 * time.Microsecond
-		iterations := missCount - 30
-		for i := 0; i < iterations && sleepTime < 5*time.Millisecond; i++ {
-			sleepTime *= 2
-		}
-		if sleepTime > 5*time.Millisecond {
-			sleepTime = 5 * time.Millisecond
-		}
-
-		select {
-		case <-s.wakeup:
-			// Woken up by new work arriving
-		case <-s.quit:
-			// Shutting down
-			return true
-		case <-time.After(sleepTime):
-			// Normal timeout
-		}
-	}
-
-	return false
-}
-
 // drain processes any remaining tasks in the local and global queues during shutdown.
 // This ensures that all submitted tasks are completed before the worker exits.
 // Both queues are drained in parallel for faster shutdown.
@@ -472,5 +417,4 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 
 func (s *workSteal[T, R]) Shutdown() {
 	close(s.quit)
-	close(s.wakeup)
 }
