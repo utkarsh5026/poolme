@@ -24,66 +24,32 @@ func BenchmarkStrategy_CPUBound_AllStrategies(b *testing.B) {
 	taskCount := 10000
 	processFunc := cpuBoundWork(1000) // Moderate CPU work
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC_Bounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-			},
-		},
-		{
-			name: "MPMC_Unbounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithUnboundedQueue()),
-			},
-		},
-	}
+	strategies := getAllStrategiesWithQueueSize(workers, taskCount*2)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				tasks := make([]int, taskCount)
-				for j := range tasks {
-					tasks[j] = j
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, processFunc)
-				if err != nil {
-					b.Fatal(err)
-				}
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tasks := make([]int, taskCount)
+			for j := range tasks {
+				tasks[j] = j
 			}
-			b.StopTimer()
 
-			// Report throughput metrics
-			tasksPerOp := float64(taskCount)
-			nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
-			tasksPerSec := (tasksPerOp / nsPerOp) * 1e9
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, processFunc)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
 
-			b.ReportMetric(tasksPerSec, "tasks/sec")
-			b.ReportMetric(tasksPerSec/float64(workers), "tasks/sec/worker")
-		})
-	}
+		// Report throughput metrics
+		tasksPerOp := float64(taskCount)
+		nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+		tasksPerSec := (tasksPerOp / nsPerOp) * 1e9
+
+		b.ReportMetric(tasksPerSec, "tasks/sec")
+		b.ReportMetric(tasksPerSec/float64(workers), "tasks/sec/worker")
+	})
 }
 
 // BenchmarkStrategy_IOBound_AllStrategies compares all scheduling strategies
@@ -93,57 +59,23 @@ func BenchmarkStrategy_IOBound_AllStrategies(b *testing.B) {
 	taskCount := 1000
 	processFunc := ioBoundWork(2 * time.Millisecond)
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC_Bounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-			},
-		},
-		{
-			name: "MPMC_Unbounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithUnboundedQueue()),
-			},
-		},
-	}
+	strategies := getAllStrategiesWithQueueSize(workers, taskCount*2)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				tasks := make([]int, taskCount)
-				for j := range tasks {
-					tasks[j] = j
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, processFunc)
-				if err != nil {
-					b.Fatal(err)
-				}
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tasks := make([]int, taskCount)
+			for j := range tasks {
+				tasks[j] = j
 			}
-		})
-	}
+
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, processFunc)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // BenchmarkStrategy_Mixed_AllStrategies compares all scheduling strategies
@@ -153,57 +85,23 @@ func BenchmarkStrategy_Mixed_AllStrategies(b *testing.B) {
 	taskCount := 5000
 	processFunc := mixedWork()
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC_Bounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-			},
-		},
-		{
-			name: "MPMC_Unbounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithUnboundedQueue()),
-			},
-		},
-	}
+	strategies := getAllStrategiesWithQueueSize(workers, taskCount*2)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				tasks := make([]int, taskCount)
-				for j := range tasks {
-					tasks[j] = j
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, processFunc)
-				if err != nil {
-					b.Fatal(err)
-				}
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tasks := make([]int, taskCount)
+			for j := range tasks {
+				tasks[j] = j
 			}
-		})
-	}
+
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, processFunc)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // =============================================================================
@@ -217,55 +115,28 @@ func BenchmarkStrategy_WorkerScaling(b *testing.B) {
 
 	for _, workers := range workerCounts {
 		b.Run(fmt.Sprintf("Workers_%d", workers), func(b *testing.B) {
-			strategies := []struct {
-				name string
-				opts []pool.WorkerPoolOption
-			}{
-				{
-					name: "Channel",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithSchedulingStrategy(pool.SchedulingChannel),
-					},
-				},
-				{
-					name: "WorkStealing",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithWorkStealing(),
-					},
-				},
-				{
-					name: "MPMC",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-					},
-				},
-			}
+			strategies := getBasicStrategies(workers)
 
-			for _, strategy := range strategies {
-				b.Run(strategy.name, func(b *testing.B) {
-					b.ResetTimer()
-					for i := 0; i < b.N; i++ {
-						tasks := make([]int, taskCount)
-						for j := range tasks {
-							tasks[j] = j
-						}
-
-						wp := pool.NewWorkerPool[int, int](strategy.opts...)
-						_, err := wp.Process(context.Background(), tasks, processFunc)
-						if err != nil {
-							b.Fatal(err)
-						}
+			runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					tasks := make([]int, taskCount)
+					for j := range tasks {
+						tasks[j] = j
 					}
 
-					// Report efficiency metrics
-					nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
-					tasksPerSec := (float64(taskCount) / nsPerOp) * 1e9
-					b.ReportMetric(tasksPerSec/float64(workers), "tasks/sec/worker")
-				})
-			}
+					wp := pool.NewWorkerPool[int, int](s.opts...)
+					_, err := wp.Process(context.Background(), tasks, processFunc)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+
+				// Report efficiency metrics
+				nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+				tasksPerSec := (float64(taskCount) / nsPerOp) * 1e9
+				b.ReportMetric(tasksPerSec/float64(workers), "tasks/sec/worker")
+			})
 		})
 	}
 }
@@ -281,62 +152,28 @@ func BenchmarkStrategy_LoadScaling(b *testing.B) {
 
 	for _, taskCount := range taskCounts {
 		b.Run(fmt.Sprintf("Tasks_%d", taskCount), func(b *testing.B) {
-			strategies := []struct {
-				name string
-				opts []pool.WorkerPoolOption
-			}{
-				{
-					name: "Channel",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithSchedulingStrategy(pool.SchedulingChannel),
-					},
-				},
-				{
-					name: "WorkStealing",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithWorkStealing(),
-					},
-				},
-				{
-					name: "MPMC_Bounded",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-					},
-				},
-				{
-					name: "MPMC_Unbounded",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithMPMCQueue(pool.WithUnboundedQueue()),
-					},
-				},
-			}
+			strategies := getAllStrategiesWithQueueSize(workers, taskCount*2)
 
-			for _, strategy := range strategies {
-				b.Run(strategy.name, func(b *testing.B) {
-					b.ResetTimer()
-					for i := 0; i < b.N; i++ {
-						tasks := make([]int, taskCount)
-						for j := range tasks {
-							tasks[j] = j
-						}
-
-						wp := pool.NewWorkerPool[int, int](strategy.opts...)
-						_, err := wp.Process(context.Background(), tasks, processFunc)
-						if err != nil {
-							b.Fatal(err)
-						}
+			runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					tasks := make([]int, taskCount)
+					for j := range tasks {
+						tasks[j] = j
 					}
 
-					// Report throughput
-					nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
-					tasksPerSec := (float64(taskCount) / nsPerOp) * 1e9
-					b.ReportMetric(tasksPerSec, "tasks/sec")
-				})
-			}
+					wp := pool.NewWorkerPool[int, int](s.opts...)
+					_, err := wp.Process(context.Background(), tasks, processFunc)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+
+				// Report throughput
+				nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+				tasksPerSec := (float64(taskCount) / nsPerOp) * 1e9
+				b.ReportMetric(tasksPerSec, "tasks/sec")
+			})
 		})
 	}
 }
@@ -350,59 +187,25 @@ func BenchmarkStrategy_MemoryAllocations(b *testing.B) {
 	taskCount := 10000
 	processFunc := cpuBoundWork(100)
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC_Bounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-			},
-		},
-		{
-			name: "MPMC_Unbounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithUnboundedQueue()),
-			},
-		},
-	}
+	strategies := getAllStrategiesWithQueueSize(workers, taskCount*2)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			b.ReportAllocs()
-			b.ResetTimer()
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		b.ReportAllocs()
+		b.ResetTimer()
 
-			for i := 0; i < b.N; i++ {
-				tasks := make([]int, taskCount)
-				for j := range tasks {
-					tasks[j] = j
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, processFunc)
-				if err != nil {
-					b.Fatal(err)
-				}
+		for i := 0; i < b.N; i++ {
+			tasks := make([]int, taskCount)
+			for j := range tasks {
+				tasks[j] = j
 			}
-		})
-	}
+
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, processFunc)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // =============================================================================
@@ -414,77 +217,50 @@ func BenchmarkStrategy_LatencyDistribution(b *testing.B) {
 	taskCount := 5000
 	processFunc := cpuBoundWork(10000)
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-			},
-		},
-	}
+	strategies := getBasicStrategies(workers)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			tasks := make([]int, taskCount)
-			for j := range tasks {
-				tasks[j] = j
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		tasks := make([]int, taskCount)
+		for j := range tasks {
+			tasks[j] = j
+		}
+
+		b.ResetTimer()
+		for i := 0; b.Loop(); i++ {
+			var latencies []time.Duration
+			var mu sync.Mutex
+
+			processWithLatency := func(ctx context.Context, task int) (int, error) {
+				start := time.Now()
+				result, err := processFunc(ctx, task)
+				elapsed := time.Since(start)
+
+				mu.Lock()
+				latencies = append(latencies, elapsed)
+				mu.Unlock()
+
+				return result, err
 			}
 
-			b.ResetTimer()
-			for i := 0; b.Loop(); i++ {
-				var latencies []time.Duration
-				var mu sync.Mutex
-
-				processWithLatency := func(ctx context.Context, task int) (int, error) {
-					start := time.Now()
-					result, err := processFunc(ctx, task)
-					elapsed := time.Since(start)
-
-					mu.Lock()
-					latencies = append(latencies, elapsed)
-					mu.Unlock()
-
-					return result, err
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, processWithLatency)
-				if err != nil {
-					b.Fatal(err)
-				}
-
-				if i == b.N-1 && len(latencies) > 0 {
-					p50 := percentile(latencies, 0.50)
-					p95 := percentile(latencies, 0.95)
-					p99 := percentile(latencies, 0.99)
-					pMax := percentile(latencies, 1.0)
-
-					b.ReportMetric(float64(p50.Nanoseconds()), "p50_ns")
-					b.ReportMetric(float64(p95.Nanoseconds()), "p95_ns")
-					b.ReportMetric(float64(p99.Nanoseconds()), "p99_ns")
-					b.ReportMetric(float64(pMax.Nanoseconds()), "max_ns")
-				}
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, processWithLatency)
+			if err != nil {
+				b.Fatal(err)
 			}
-		})
-	}
+
+			if i == b.N-1 && len(latencies) > 0 {
+				p50 := percentile(latencies, 0.50)
+				p95 := percentile(latencies, 0.95)
+				p99 := percentile(latencies, 0.99)
+				pMax := percentile(latencies, 1.0)
+
+				b.ReportMetric(float64(p50.Nanoseconds()), "p50_ns")
+				b.ReportMetric(float64(p95.Nanoseconds()), "p95_ns")
+				b.ReportMetric(float64(p99.Nanoseconds()), "p99_ns")
+				b.ReportMetric(float64(pMax.Nanoseconds()), "max_ns")
+			}
+		}
+	})
 }
 
 // =============================================================================
@@ -499,83 +275,56 @@ func BenchmarkStrategy_ConcurrentSubmission(b *testing.B) {
 
 	for _, numSubmitters := range submitters {
 		b.Run(fmt.Sprintf("Submitters_%d", numSubmitters), func(b *testing.B) {
-			strategies := []struct {
-				name string
-				opts []pool.WorkerPoolOption
-			}{
-				{
-					name: "Channel",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithSchedulingStrategy(pool.SchedulingChannel),
-					},
-				},
-				{
-					name: "WorkStealing",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithWorkStealing(),
-					},
-				},
-				{
-					name: "MPMC",
-					opts: []pool.WorkerPoolOption{
-						pool.WithWorkerCount(workers),
-						pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-					},
-				},
-			}
+			strategies := getBasicStrategies(workers)
 
-			for _, strategy := range strategies {
-				b.Run(strategy.name, func(b *testing.B) {
-					b.ResetTimer()
-					for i := 0; i < b.N; i++ {
-						tasks := make([]int, taskCount)
-						for j := range tasks {
-							tasks[j] = j
-						}
-
-						wp := pool.NewWorkerPool[int, int](strategy.opts...)
-
-						// Split tasks among submitters
-						tasksPerSubmitter := taskCount / numSubmitters
-						var wg sync.WaitGroup
-						var errOnce sync.Once
-						var firstErr error
-						wg.Add(numSubmitters)
-
-						for s := 0; s < numSubmitters; s++ {
-							startIdx := s * tasksPerSubmitter
-							endIdx := startIdx + tasksPerSubmitter
-							if s == numSubmitters-1 {
-								endIdx = taskCount
-							}
-
-							go func(start, end int) {
-								defer wg.Done()
-								subTasks := tasks[start:end]
-								_, err := wp.Process(context.Background(), subTasks, processFunc)
-								if err != nil {
-									errOnce.Do(func() {
-										firstErr = err
-									})
-								}
-							}(startIdx, endIdx)
-						}
-
-						wg.Wait()
-						if firstErr != nil {
-							b.Fatal(firstErr)
-						}
+			runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					tasks := make([]int, taskCount)
+					for j := range tasks {
+						tasks[j] = j
 					}
-					b.StopTimer()
 
-					// Report custom metric for ns/task
-					nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
-					nsPerTask := nsPerOp / float64(taskCount)
-					b.ReportMetric(nsPerTask, "ns/task")
-				})
-			}
+					wp := pool.NewWorkerPool[int, int](s.opts...)
+
+					// Split tasks among submitters
+					tasksPerSubmitter := taskCount / numSubmitters
+					var wg sync.WaitGroup
+					var errOnce sync.Once
+					var firstErr error
+					wg.Add(numSubmitters)
+
+					for s := 0; s < numSubmitters; s++ {
+						startIdx := s * tasksPerSubmitter
+						endIdx := startIdx + tasksPerSubmitter
+						if s == numSubmitters-1 {
+							endIdx = taskCount
+						}
+
+						go func(start, end int) {
+							defer wg.Done()
+							subTasks := tasks[start:end]
+							_, err := wp.Process(context.Background(), subTasks, processFunc)
+							if err != nil {
+								errOnce.Do(func() {
+									firstErr = err
+								})
+							}
+						}(startIdx, endIdx)
+					}
+
+					wg.Wait()
+					if firstErr != nil {
+						b.Fatal(firstErr)
+					}
+				}
+				b.StopTimer()
+
+				// Report custom metric for ns/task
+				nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+				nsPerTask := nsPerOp / float64(taskCount)
+				b.ReportMetric(nsPerTask, "ns/task")
+			})
 		})
 	}
 }
@@ -603,50 +352,23 @@ func BenchmarkStrategy_VariableComplexity(b *testing.B) {
 		return result, nil
 	}
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-			},
-		},
-	}
+	strategies := getBasicStrategies(workers)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				tasks := make([]int, taskCount)
-				for j := range tasks {
-					tasks[j] = j
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, variableComplexityWork)
-				if err != nil {
-					b.Fatal(err)
-				}
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tasks := make([]int, taskCount)
+			for j := range tasks {
+				tasks[j] = j
 			}
-		})
-	}
+
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, variableComplexityWork)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // =============================================================================
@@ -658,55 +380,28 @@ func BenchmarkStrategy_HighContention(b *testing.B) {
 	taskCount := 50000              // Many small tasks
 	processFunc := cpuBoundWork(10) // Very light work to maximize scheduling overhead
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-			},
-		},
-	}
+	strategies := getBasicStrategies(workers)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				tasks := make([]int, taskCount)
-				for j := range tasks {
-					tasks[j] = j
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, processFunc)
-				if err != nil {
-					b.Fatal(err)
-				}
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tasks := make([]int, taskCount)
+			for j := range tasks {
+				tasks[j] = j
 			}
 
-			// Report scheduling efficiency
-			nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
-			tasksPerSec := (float64(taskCount) / nsPerOp) * 1e9
-			b.ReportMetric(tasksPerSec, "tasks/sec")
-		})
-	}
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, processFunc)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		// Report scheduling efficiency
+		nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+		tasksPerSec := (float64(taskCount) / nsPerOp) * 1e9
+		b.ReportMetric(tasksPerSec, "tasks/sec")
+	})
 }
 
 // =============================================================================
@@ -720,70 +415,36 @@ func BenchmarkStrategy_BurstLoad(b *testing.B) {
 	// Simulate bursty workload: small batch, then large batch
 	burstPattern := []int{100, 10000, 100, 10000}
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC_Bounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(20000)),
-			},
-		},
-		{
-			name: "MPMC_Unbounded",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithUnboundedQueue()),
-			},
-		},
-	}
+	strategies := getAllStrategies(workers)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			var totalTasks atomic.Int64
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		var totalTasks atomic.Int64
 
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			wp := pool.NewWorkerPool[int, int](s.opts...)
 
-				for _, batchSize := range burstPattern {
-					tasks := make([]int, batchSize)
-					for j := range tasks {
-						tasks[j] = j
-					}
-
-					_, err := wp.Process(context.Background(), tasks, processFunc)
-					if err != nil {
-						b.Fatal(err)
-					}
-					totalTasks.Add(int64(batchSize))
+			for _, batchSize := range burstPattern {
+				tasks := make([]int, batchSize)
+				for j := range tasks {
+					tasks[j] = j
 				}
-			}
-			b.StopTimer()
 
-			// Report average throughput across bursts
-			nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
-			avgTasksPerBurst := float64(totalTasks.Load()) / float64(b.N)
-			tasksPerSec := (avgTasksPerBurst / nsPerOp) * 1e9
-			b.ReportMetric(tasksPerSec, "avg_tasks/sec")
-		})
-	}
+				_, err := wp.Process(context.Background(), tasks, processFunc)
+				if err != nil {
+					b.Fatal(err)
+				}
+				totalTasks.Add(int64(batchSize))
+			}
+		}
+		b.StopTimer()
+
+		// Report average throughput across bursts
+		nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+		avgTasksPerBurst := float64(totalTasks.Load()) / float64(b.N)
+		tasksPerSec := (avgTasksPerBurst / nsPerOp) * 1e9
+		b.ReportMetric(tasksPerSec, "avg_tasks/sec")
+	})
 }
 
 // =============================================================================
@@ -801,43 +462,23 @@ func BenchmarkStrategy_PriorityQueue(b *testing.B) {
 		return a < b // Lower values have higher priority
 	}
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel_NoPriority",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "PriorityQueue",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithPriorityQueue(lessFunc),
-			},
-		},
-	}
+	strategies := getPriorityStrategies(workers, lessFunc)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				tasks := make([]int, taskCount)
-				for j := range tasks {
-					tasks[j] = j
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, processFunc)
-				if err != nil {
-					b.Fatal(err)
-				}
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tasks := make([]int, taskCount)
+			for j := range tasks {
+				tasks[j] = j
 			}
-		})
-	}
+
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, processFunc)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // =============================================================================
@@ -861,43 +502,23 @@ func BenchmarkStrategy_CacheLocality(b *testing.B) {
 		return sum, nil
 	}
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-	}
+	strategies := getCacheLocalityStrategies(workers)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				tasks := make([]int, taskCount)
-				for j := range tasks {
-					tasks[j] = j
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, cacheLocalWork)
-				if err != nil {
-					b.Fatal(err)
-				}
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tasks := make([]int, taskCount)
+			for j := range tasks {
+				tasks[j] = j
 			}
-		})
-	}
+
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, cacheLocalWork)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // =============================================================================
@@ -909,76 +530,49 @@ func BenchmarkStrategy_TailLatency(b *testing.B) {
 	taskCount := 10000
 	processFunc := cpuBoundWork(10000) // Increased from 1000 to make latencies measurable
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-			},
-		},
-	}
+	strategies := getBasicStrategies(workers)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			tasks := make([]int, taskCount)
-			for j := range tasks {
-				tasks[j] = j
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		tasks := make([]int, taskCount)
+		for j := range tasks {
+			tasks[j] = j
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			var latencies []time.Duration
+			var mu sync.Mutex
+
+			processWithLatency := func(ctx context.Context, task int) (int, error) {
+				start := time.Now()
+				result, err := processFunc(ctx, task)
+				elapsed := time.Since(start)
+
+				mu.Lock()
+				latencies = append(latencies, elapsed)
+				mu.Unlock()
+
+				return result, err
 			}
 
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				var latencies []time.Duration
-				var mu sync.Mutex
-
-				processWithLatency := func(ctx context.Context, task int) (int, error) {
-					start := time.Now()
-					result, err := processFunc(ctx, task)
-					elapsed := time.Since(start)
-
-					mu.Lock()
-					latencies = append(latencies, elapsed)
-					mu.Unlock()
-
-					return result, err
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, processWithLatency)
-				if err != nil {
-					b.Fatal(err)
-				}
-
-				// Calculate and report percentiles (only on last iteration)
-				if i == b.N-1 && len(latencies) > 0 {
-					p99 := percentile(latencies, 0.99)
-					p999 := percentile(latencies, 0.999)
-					pMax := percentile(latencies, 1.0)
-
-					b.ReportMetric(float64(p99.Nanoseconds()), "p99_ns")
-					b.ReportMetric(float64(p999.Nanoseconds()), "p999_ns")
-					b.ReportMetric(float64(pMax.Nanoseconds()), "max_ns")
-				}
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, processWithLatency)
+			if err != nil {
+				b.Fatal(err)
 			}
-		})
-	}
+
+			// Calculate and report percentiles (only on last iteration)
+			if i == b.N-1 && len(latencies) > 0 {
+				p99 := percentile(latencies, 0.99)
+				p999 := percentile(latencies, 0.999)
+				pMax := percentile(latencies, 1.0)
+
+				b.ReportMetric(float64(p99.Nanoseconds()), "p99_ns")
+				b.ReportMetric(float64(p999.Nanoseconds()), "p999_ns")
+				b.ReportMetric(float64(pMax.Nanoseconds()), "max_ns")
+			}
+		}
+	})
 }
 
 // BenchmarkStrategy_ExtremeImbalance tests with VERY uneven task distribution
@@ -1002,50 +596,23 @@ func BenchmarkStrategy_ExtremeImbalance(b *testing.B) {
 		return result, nil
 	}
 
-	strategies := []struct {
-		name string
-		opts []pool.WorkerPoolOption
-	}{
-		{
-			name: "Channel",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithSchedulingStrategy(pool.SchedulingChannel),
-			},
-		},
-		{
-			name: "WorkStealing",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithWorkStealing(),
-			},
-		},
-		{
-			name: "MPMC",
-			opts: []pool.WorkerPoolOption{
-				pool.WithWorkerCount(workers),
-				pool.WithMPMCQueue(pool.WithBoundedQueue(taskCount * 2)),
-			},
-		},
-	}
+	strategies := getBasicStrategies(workers)
 
-	for _, strategy := range strategies {
-		b.Run(strategy.name, func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				tasks := make([]int, taskCount)
-				for j := range tasks {
-					tasks[j] = j
-				}
-
-				wp := pool.NewWorkerPool[int, int](strategy.opts...)
-				_, err := wp.Process(context.Background(), tasks, extremeComplexityWork)
-				if err != nil {
-					b.Fatal(err)
-				}
+	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tasks := make([]int, taskCount)
+			for j := range tasks {
+				tasks[j] = j
 			}
-		})
-	}
+
+			wp := pool.NewWorkerPool[int, int](s.opts...)
+			_, err := wp.Process(context.Background(), tasks, extremeComplexityWork)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // =============================================================================
