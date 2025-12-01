@@ -20,7 +20,7 @@ type channelStrategy[T any, R any] struct {
 	config       *ProcessorConfig[T, R]            // Processor configuration parameters.
 	taskChans    []chan *types.SubmittedTask[T, R] // Per-worker task channels.
 	counter      atomic.Int64                      // Atomic counter for round-robin channel selection.
-	quit         chan struct{}                     // Channel to signal task submissions to stop.
+	quit         chan signal                       // Channel to signal task submissions to stop.
 	affinityFunc func(t T) string
 	submitWg     sync.WaitGroup // WaitGroup to track in-flight submissions
 }
@@ -33,7 +33,7 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 	c := &channelStrategy[T, R]{
 		config:       conf,
 		taskChans:    make([]chan *types.SubmittedTask[T, R], n),
-		quit:         make(chan struct{}),
+		quit:         make(chan signal),
 		affinityFunc: conf.AffinityFunc,
 	}
 
