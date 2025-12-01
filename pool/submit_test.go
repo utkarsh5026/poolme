@@ -1,4 +1,4 @@
-package pool
+package pool_test
 
 import (
 	"context"

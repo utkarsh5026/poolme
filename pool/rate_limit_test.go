@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -127,7 +128,7 @@ func TestWorkerPool_RateLimit_WithContextCancellation(t *testing.T) {
 	}
 
 	// Both context.DeadlineExceeded and rate limiter's context error are acceptable
-	if !errors.Is(err, context.DeadlineExceeded) && !contains(err.Error(), "context deadline") {
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "context deadline") {
 		t.Errorf("expected context deadline exceeded, got: %v", err)
 	}
 

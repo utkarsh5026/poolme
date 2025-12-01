@@ -10,501 +10,552 @@ import (
 )
 
 func TestWorkerPool_Start(t *testing.T) {
-	t.Run("successful start", func(t *testing.T) {
-		pool := NewScheduler[int, string](WithWorkerCount(4))
+	strategies := getAllStrategies(4)
 
-		processFn := func(ctx context.Context, task int) (string, error) {
-			return "result", nil
-		}
+	for _, strategy := range strategies {
+		t.Run(strategy.name+"/successful start", func(t *testing.T) {
+			pool := NewScheduler[int, string](strategy.opts...)
 
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		defer pool.Shutdown(time.Second)
-
-		// Verify pool is started
-		if pool.state == nil {
-			t.Error("pool state should not be nil after start")
-		}
-		if !pool.state.started.Load() {
-			t.Error("pool should be marked as started")
-		}
-	})
-
-	t.Run("double start fails", func(t *testing.T) {
-		pool := NewScheduler[int, string](WithWorkerCount(2))
-
-		processFn := func(ctx context.Context, task int) (string, error) {
-			return "result", nil
-		}
-
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("first start failed: %v", err)
-		}
-		defer pool.Shutdown(time.Second)
-
-		err = pool.Start(context.Background(), processFn)
-		if err == nil {
-			t.Error("expected error on second start")
-		}
-		if err.Error() != "pool already started" {
-			t.Errorf("expected 'pool already started', got %v", err)
-		}
-	})
-
-	t.Run("start with cancelled context", func(t *testing.T) {
-		pool := NewScheduler[int, string](WithWorkerCount(2))
-
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // Cancel immediately
-
-		processFn := func(ctx context.Context, task int) (string, error) {
-			return "result", nil
-		}
-
-		err := pool.Start(ctx, processFn)
-		if err != nil {
-			t.Fatalf("start should succeed even with cancelled context: %v", err)
-		}
-		defer pool.Shutdown(time.Second)
-
-		// Try to submit - should fail or return context cancelled
-		future, err := pool.Submit(1)
-		if err == nil {
-			// Use GetWithContext with a short timeout instead of blocking Get
-			getCtx, getCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-			defer getCancel()
-			_, _, err = future.GetWithContext(getCtx)
-			if err == nil {
-				t.Error("expected error with cancelled context")
+			processFn := func(ctx context.Context, task int) (string, error) {
+				return "result", nil
 			}
-		}
-	})
+
+			err := pool.Start(context.Background(), processFn)
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			defer pool.Shutdown(time.Second)
+
+			// Verify pool is started
+			if pool.state == nil {
+				t.Error("pool state should not be nil after start")
+			}
+			if !pool.state.started.Load() {
+				t.Error("pool should be marked as started")
+			}
+		})
+	}
+
+	strategies2 := getAllStrategies(2)
+	for _, strategy := range strategies2 {
+		t.Run(strategy.name+"/double start fails", func(t *testing.T) {
+			pool := NewScheduler[int, string](strategy.opts...)
+
+			processFn := func(ctx context.Context, task int) (string, error) {
+				return "result", nil
+			}
+
+			err := pool.Start(context.Background(), processFn)
+			if err != nil {
+				t.Fatalf("first start failed: %v", err)
+			}
+			defer pool.Shutdown(time.Second)
+
+			err = pool.Start(context.Background(), processFn)
+			if err == nil {
+				t.Error("expected error on second start")
+			}
+			if err.Error() != "pool already started" {
+				t.Errorf("expected 'pool already started', got %v", err)
+			}
+		})
+	}
+
+	strategies3 := getAllStrategies(2)
+	for _, strategy := range strategies3 {
+		t.Run(strategy.name+"/start with cancelled context", func(t *testing.T) {
+			pool := NewScheduler[int, string](strategy.opts...)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // Cancel immediately
+
+			processFn := func(ctx context.Context, task int) (string, error) {
+				return "result", nil
+			}
+
+			err := pool.Start(ctx, processFn)
+			if err != nil {
+				t.Fatalf("start should succeed even with cancelled context: %v", err)
+			}
+			defer pool.Shutdown(time.Second)
+
+			// Try to submit - should fail or return context cancelled
+			future, err := pool.Submit(1)
+			if err == nil {
+				// Use GetWithContext with a short timeout instead of blocking Get
+				getCtx, getCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				defer getCancel()
+				_, _, err = future.GetWithContext(getCtx)
+				if err == nil {
+					t.Error("expected error with cancelled context")
+				}
+			}
+		})
+	}
 }
 
 func TestWorkerPool_Shutdown(t *testing.T) {
-	t.Run("successful shutdown", func(t *testing.T) {
-		pool := NewScheduler[int, string](WithWorkerCount(2))
+	strategies := getAllStrategies(2)
 
-		processFn := func(ctx context.Context, task int) (string, error) {
-			return "result", nil
-		}
+	for _, strategy := range strategies {
+		t.Run(strategy.name+"/successful shutdown", func(t *testing.T) {
+			pool := NewScheduler[int, string](strategy.opts...)
 
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("failed to start: %v", err)
-		}
+			processFn := func(ctx context.Context, task int) (string, error) {
+				return "result", nil
+			}
 
-		err = pool.Shutdown(time.Second)
-		if err != nil {
-			t.Errorf("shutdown failed: %v", err)
-		}
+			err := pool.Start(context.Background(), processFn)
+			if err != nil {
+				t.Fatalf("failed to start: %v", err)
+			}
 
-		if !pool.state.shutdown.Load() {
-			t.Error("pool should be marked as shutdown")
-		}
-	})
+			err = pool.Shutdown(time.Second)
+			if err != nil {
+				t.Errorf("shutdown failed: %v", err)
+			}
 
-	t.Run("shutdown without start fails", func(t *testing.T) {
-		pool := NewScheduler[int, string]()
+			if !pool.state.shutdown.Load() {
+				t.Error("pool should be marked as shutdown")
+			}
+		})
+	}
 
-		err := pool.Shutdown(time.Second)
-		if err == nil {
-			t.Error("expected error when shutting down non-started pool")
-		}
-		if err.Error() != "pool not started" {
-			t.Errorf("expected 'pool not started', got %v", err)
-		}
-	})
+	strategies2 := getAllStrategies(2)
+	for _, strategy := range strategies2 {
+		t.Run(strategy.name+"/shutdown without start fails", func(t *testing.T) {
+			pool := NewScheduler[int, string](strategy.opts...)
 
-	t.Run("double shutdown fails", func(t *testing.T) {
-		pool := NewScheduler[int, string](WithWorkerCount(2))
+			err := pool.Shutdown(time.Second)
+			if err == nil {
+				t.Error("expected error when shutting down non-started pool")
+			}
+			if err.Error() != "pool not started" {
+				t.Errorf("expected 'pool not started', got %v", err)
+			}
+		})
+	}
 
-		processFn := func(ctx context.Context, task int) (string, error) {
-			return "result", nil
-		}
+	strategies3 := getAllStrategies(2)
+	for _, strategy := range strategies3 {
+		t.Run(strategy.name+"/double shutdown fails", func(t *testing.T) {
+			pool := NewScheduler[int, string](strategy.opts...)
 
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("failed to start: %v", err)
-		}
+			processFn := func(ctx context.Context, task int) (string, error) {
+				return "result", nil
+			}
 
-		err = pool.Shutdown(time.Second)
-		if err != nil {
-			t.Fatalf("first shutdown failed: %v", err)
-		}
+			err := pool.Start(context.Background(), processFn)
+			if err != nil {
+				t.Fatalf("failed to start: %v", err)
+			}
 
-		err = pool.Shutdown(time.Second)
-		if err == nil {
-			t.Error("expected error on second shutdown")
-		}
-		if err.Error() != "pool already shut down" {
-			t.Errorf("expected 'pool already shut down', got %v", err)
-		}
-	})
+			err = pool.Shutdown(time.Second)
+			if err != nil {
+				t.Fatalf("first shutdown failed: %v", err)
+			}
 
-	t.Run("shutdown with zero timeout", func(t *testing.T) {
-		pool := NewScheduler[int, string](WithWorkerCount(2))
+			err = pool.Shutdown(time.Second)
+			if err == nil {
+				t.Error("expected error on second shutdown")
+			}
+			if err.Error() != "pool already shut down" {
+				t.Errorf("expected 'pool already shut down', got %v", err)
+			}
+		})
+	}
 
-		processFn := func(ctx context.Context, task int) (string, error) {
-			time.Sleep(10 * time.Millisecond)
-			return "result", nil
-		}
+	strategies4 := getAllStrategies(2)
+	for _, strategy := range strategies4 {
+		t.Run(strategy.name+"/shutdown with zero timeout", func(t *testing.T) {
+			pool := NewScheduler[int, string](strategy.opts...)
 
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("failed to start: %v", err)
-		}
+			processFn := func(ctx context.Context, task int) (string, error) {
+				time.Sleep(10 * time.Millisecond)
+				return "result", nil
+			}
 
-		// Submit some tasks
-		for i := 0; i < 5; i++ {
-			_, _ = pool.Submit(i)
-		}
+			err := pool.Start(context.Background(), processFn)
+			if err != nil {
+				t.Fatalf("failed to start: %v", err)
+			}
 
-		// Shutdown with zero timeout (wait indefinitely)
-		err = pool.Shutdown(0)
-		if err != nil {
-			t.Errorf("shutdown with zero timeout should succeed: %v", err)
-		}
-	})
+			// Submit some tasks
+			for i := 0; i < 5; i++ {
+				_, _ = pool.Submit(i)
+			}
+
+			// Shutdown with zero timeout (wait indefinitely)
+			err = pool.Shutdown(0)
+			if err != nil {
+				t.Errorf("shutdown with zero timeout should succeed: %v", err)
+			}
+		})
+	}
 }
 
 func TestWorkerPool_Shutdown_GracefulWait(t *testing.T) {
-	t.Run("waits for in-flight tasks", func(t *testing.T) {
-		pool := NewScheduler[int, int](WithWorkerCount(2))
+	strategies := getAllStrategies(2)
 
-		var completedCount atomic.Int32
+	for _, strategy := range strategies {
+		t.Run(strategy.name+"/waits for in-flight tasks", func(t *testing.T) {
+			pool := NewScheduler[int, int](strategy.opts...)
 
-		processFn := func(ctx context.Context, task int) (int, error) {
-			time.Sleep(100 * time.Millisecond)
-			completedCount.Add(1)
-			return task * 2, nil
-		}
+			var completedCount atomic.Int32
 
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("failed to start: %v", err)
-		}
+			processFn := func(ctx context.Context, task int) (int, error) {
+				time.Sleep(100 * time.Millisecond)
+				completedCount.Add(1)
+				return task * 2, nil
+			}
 
-		// Submit tasks
-		numTasks := 10
-		futures := make([]*Future[int, int64], numTasks)
-		for i := 0; i < numTasks; i++ {
-			future, err := pool.Submit(i)
+			err := pool.Start(context.Background(), processFn)
 			if err != nil {
-				t.Fatalf("failed to submit task %d: %v", i, err)
+				t.Fatalf("failed to start: %v", err)
 			}
-			futures[i] = future
-		}
 
-		// Shutdown with generous timeout
-		err = pool.Shutdown(5 * time.Second)
-		if err != nil {
-			t.Errorf("shutdown failed: %v", err)
-		}
+			// Submit tasks
+			numTasks := 10
+			futures := make([]*Future[int, int64], numTasks)
+			for i := 0; i < numTasks; i++ {
+				future, err := pool.Submit(i)
+				if err != nil {
+					t.Fatalf("failed to submit task %d: %v", i, err)
+				}
+				futures[i] = future
+			}
 
-		// All tasks should be completed
-		completed := completedCount.Load()
-		if completed != int32(numTasks) {
-			t.Errorf("expected %d completed tasks, got %d", numTasks, completed)
-		}
-
-		// All futures should have results - verify by getting them
-		for i, future := range futures {
-			value, _, err := future.Get()
+			// Shutdown with generous timeout
+			err = pool.Shutdown(5 * time.Second)
 			if err != nil {
-				t.Errorf("future %d failed: %v", i, err)
+				t.Errorf("shutdown failed: %v", err)
 			}
-			expected := i * 2
-			if value != expected {
-				t.Errorf("future %d: expected %d, got %d", i, expected, value)
+
+			// All tasks should be completed
+			completed := completedCount.Load()
+			if completed != int32(numTasks) {
+				t.Errorf("expected %d completed tasks, got %d", numTasks, completed)
 			}
-		}
-	})
+
+			// All futures should have results - verify by getting them
+			for i, future := range futures {
+				value, _, err := future.Get()
+				if err != nil {
+					t.Errorf("future %d failed: %v", i, err)
+				}
+				expected := i * 2
+				if value != expected {
+					t.Errorf("future %d: expected %d, got %d", i, expected, value)
+				}
+			}
+		})
+	}
 }
 
 func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
-	t.Run("timeout exceeded", func(t *testing.T) {
-		pool := NewScheduler[int, int](WithWorkerCount(1))
+	strategies := getAllStrategies(1)
 
-		processFn := func(ctx context.Context, task int) (int, error) {
-			// Long-running task that ignores context
-			time.Sleep(2 * time.Second)
-			return task, nil
-		}
+	for _, strategy := range strategies {
+		t.Run(strategy.name+"/timeout exceeded", func(t *testing.T) {
+			pool := NewScheduler[int, int](strategy.opts...)
 
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("failed to start: %v", err)
-		}
+			processFn := func(ctx context.Context, task int) (int, error) {
+				// Long-running task that ignores context
+				time.Sleep(2 * time.Second)
+				return task, nil
+			}
 
-		// Submit task
-		_, err = pool.Submit(1)
-		if err != nil {
-			t.Fatalf("failed to submit task: %v", err)
-		}
+			err := pool.Start(context.Background(), processFn)
+			if err != nil {
+				t.Fatalf("failed to start: %v", err)
+			}
 
-		// Shutdown with short timeout
-		start := time.Now()
-		err = pool.Shutdown(100 * time.Millisecond)
-		elapsed := time.Since(start)
+			// Submit task
+			_, err = pool.Submit(1)
+			if err != nil {
+				t.Fatalf("failed to submit task: %v", err)
+			}
 
-		if err == nil {
-			t.Error("expected timeout error")
-		}
-		if !errors.Is(err, ErrShutdownTimeout) {
-			t.Errorf("expected ErrShutdownTimeout, got %v", err)
-		}
+			// Shutdown with short timeout
+			start := time.Now()
+			err = pool.Shutdown(100 * time.Millisecond)
+			elapsed := time.Since(start)
 
-		// Should timeout around 100ms, not wait for full 2s
-		if elapsed > 500*time.Millisecond {
-			t.Errorf("shutdown took too long: %v", elapsed)
-		}
-	})
+			if err == nil {
+				t.Error("expected timeout error")
+			}
+			if !errors.Is(err, ErrShutdownTimeout) {
+				t.Errorf("expected ErrShutdownTimeout, got %v", err)
+			}
 
-	t.Run("completes before timeout", func(t *testing.T) {
-		pool := NewScheduler[int, int](WithWorkerCount(2))
+			// Should timeout around 100ms, not wait for full 2s
+			if elapsed > 500*time.Millisecond {
+				t.Errorf("shutdown took too long: %v", elapsed)
+			}
+		})
+	}
 
-		processFn := func(ctx context.Context, task int) (int, error) {
-			time.Sleep(50 * time.Millisecond)
-			return task, nil
-		}
+	strategies2 := getAllStrategies(2)
+	for _, strategy := range strategies2 {
+		t.Run(strategy.name+"/completes before timeout", func(t *testing.T) {
+			pool := NewScheduler[int, int](strategy.opts...)
 
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("failed to start: %v", err)
-		}
+			processFn := func(ctx context.Context, task int) (int, error) {
+				time.Sleep(50 * time.Millisecond)
+				return task, nil
+			}
 
-		// Submit tasks
-		for i := 0; i < 5; i++ {
-			_, _ = pool.Submit(i)
-		}
+			err := pool.Start(context.Background(), processFn)
+			if err != nil {
+				t.Fatalf("failed to start: %v", err)
+			}
 
-		// Shutdown with generous timeout
-		err = pool.Shutdown(2 * time.Second)
-		if err != nil {
-			t.Errorf("expected no error, got %v", err)
-		}
-	})
+			// Submit tasks
+			for i := 0; i < 5; i++ {
+				_, _ = pool.Submit(i)
+			}
+
+			// Shutdown with generous timeout
+			err = pool.Shutdown(2 * time.Second)
+			if err != nil {
+				t.Errorf("expected no error, got %v", err)
+			}
+		})
+	}
 }
 
 func TestWorkerPool_Shutdown_InFlightTasks(t *testing.T) {
-	pool := NewScheduler[int, string](WithWorkerCount(3))
+	strategies := getAllStrategies(3)
 
-	var startedCount atomic.Int32
-	var completedCount atomic.Int32
+	for _, strategy := range strategies {
+		t.Run(strategy.name, func(t *testing.T) {
+			pool := NewScheduler[int, string](strategy.opts...)
 
-	processFn := func(ctx context.Context, task int) (string, error) {
-		startedCount.Add(1)
-		time.Sleep(100 * time.Millisecond)
-		completedCount.Add(1)
-		return fmt.Sprintf("result-%d", task), nil
-	}
+			var startedCount atomic.Int32
+			var completedCount atomic.Int32
 
-	err := pool.Start(context.Background(), processFn)
-	if err != nil {
-		t.Fatalf("failed to start: %v", err)
-	}
+			processFn := func(ctx context.Context, task int) (string, error) {
+				startedCount.Add(1)
+				time.Sleep(100 * time.Millisecond)
+				completedCount.Add(1)
+				return fmt.Sprintf("result-%d", task), nil
+			}
 
-	// Submit tasks
-	numTasks := 20
-	futures := make([]*Future[string, int64], numTasks)
-	for i := 0; i < numTasks; i++ {
-		future, err := pool.Submit(i)
-		if err != nil {
-			t.Fatalf("failed to submit task %d: %v", i, err)
-		}
-		futures[i] = future
-		time.Sleep(5 * time.Millisecond) // Stagger submissions
-	}
+			err := pool.Start(context.Background(), processFn)
+			if err != nil {
+				t.Fatalf("failed to start: %v", err)
+			}
 
-	// Wait a bit for some tasks to start
-	time.Sleep(50 * time.Millisecond)
+			// Submit tasks
+			numTasks := 20
+			futures := make([]*Future[string, int64], numTasks)
+			for i := 0; i < numTasks; i++ {
+				future, err := pool.Submit(i)
+				if err != nil {
+					t.Fatalf("failed to submit task %d: %v", i, err)
+				}
+				futures[i] = future
+				time.Sleep(5 * time.Millisecond) // Stagger submissions
+			}
 
-	// Shutdown
-	err = pool.Shutdown(5 * time.Second)
-	if err != nil {
-		t.Errorf("shutdown failed: %v", err)
-	}
+			// Wait a bit for some tasks to start
+			time.Sleep(50 * time.Millisecond)
 
-	started := startedCount.Load()
-	completed := completedCount.Load()
+			// Shutdown
+			err = pool.Shutdown(5 * time.Second)
+			if err != nil {
+				t.Errorf("shutdown failed: %v", err)
+			}
 
-	t.Logf("Started: %d, Completed: %d out of %d tasks", started, completed, numTasks)
+			started := startedCount.Load()
+			completed := completedCount.Load()
 
-	// All started tasks should complete
-	if started != completed {
-		t.Errorf("all started tasks should complete: started=%d, completed=%d", started, completed)
-	}
+			t.Logf("Started: %d, Completed: %d out of %d tasks", started, completed, numTasks)
 
-	// Count how many futures have results by trying to get them with a timeout
-	readyCount := 0
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+			// All started tasks should complete
+			if started != completed {
+				t.Errorf("all started tasks should complete: started=%d, completed=%d", started, completed)
+			}
 
-	for _, future := range futures {
-		_, _, err := future.GetWithContext(ctx)
-		if err == nil {
-			readyCount++
-		}
-	}
+			// Count how many futures have results by trying to get them with a timeout
+			readyCount := 0
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
 
-	if readyCount != int(completed) {
-		t.Errorf("ready futures (%d) should match completed tasks (%d)", readyCount, completed)
+			for _, future := range futures {
+				_, _, err := future.GetWithContext(ctx)
+				if err == nil {
+					readyCount++
+				}
+			}
+
+			if readyCount != int(completed) {
+				t.Errorf("ready futures (%d) should match completed tasks (%d)", readyCount, completed)
+			}
+		})
 	}
 }
 
 func TestWorkerPool_StartShutdown_Cycle(t *testing.T) {
-	t.Run("cannot restart after shutdown", func(t *testing.T) {
-		pool := NewScheduler[int, string](WithWorkerCount(2))
+	strategies := getAllStrategies(2)
 
-		processFn := func(ctx context.Context, task int) (string, error) {
-			return "result", nil
-		}
+	for _, strategy := range strategies {
+		t.Run(strategy.name+"/cannot restart after shutdown", func(t *testing.T) {
+			pool := NewScheduler[int, string](strategy.opts...)
 
-		// First cycle
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("first start failed: %v", err)
-		}
+			processFn := func(ctx context.Context, task int) (string, error) {
+				return "result", nil
+			}
 
-		err = pool.Shutdown(time.Second)
-		if err != nil {
-			t.Fatalf("shutdown failed: %v", err)
-		}
+			// First cycle
+			err := pool.Start(context.Background(), processFn)
+			if err != nil {
+				t.Fatalf("first start failed: %v", err)
+			}
 
-		// Try to restart - this should fail because we don't reset state
-		err = pool.Start(context.Background(), processFn)
-		if err == nil {
-			t.Error("expected error when restarting after shutdown")
-		}
-	})
+			err = pool.Shutdown(time.Second)
+			if err != nil {
+				t.Fatalf("shutdown failed: %v", err)
+			}
+
+			// Try to restart - this should fail because we don't reset state
+			err = pool.Start(context.Background(), processFn)
+			if err == nil {
+				t.Error("expected error when restarting after shutdown")
+			}
+		})
+	}
 }
 
 func TestWorkerPool_Lifecycle_Integration(t *testing.T) {
-	t.Run("full lifecycle with submit and shutdown", func(t *testing.T) {
-		pool := NewScheduler[int, int](
-			WithWorkerCount(4),
-			WithTaskBuffer(10),
-		)
+	strategies := getAllStrategiesWithOpts(4, WithTaskBuffer(10))
 
-		processFn := func(ctx context.Context, task int) (int, error) {
-			time.Sleep(20 * time.Millisecond)
-			return task * task, nil
-		}
+	for _, strategy := range strategies {
+		t.Run(strategy.name+"/full lifecycle with submit and shutdown", func(t *testing.T) {
+			pool := NewScheduler[int, int](strategy.opts...)
 
-		// Start
-		err := pool.Start(context.Background(), processFn)
-		if err != nil {
-			t.Fatalf("start failed: %v", err)
-		}
+			processFn := func(ctx context.Context, task int) (int, error) {
+				time.Sleep(20 * time.Millisecond)
+				return task * task, nil
+			}
 
-		// Submit tasks
-		numTasks := 50
-		futures := make([]*Future[int, int64], numTasks)
-
-		for i := 0; i < numTasks; i++ {
-			future, err := pool.Submit(i)
+			// Start
+			err := pool.Start(context.Background(), processFn)
 			if err != nil {
-				t.Fatalf("submit task %d failed: %v", i, err)
+				t.Fatalf("start failed: %v", err)
 			}
-			futures[i] = future
-		}
 
-		// Collect half the results
-		for i := 0; i < numTasks/2; i++ {
-			value, _, err := futures[i].Get()
+			// Submit tasks
+			numTasks := 50
+			futures := make([]*Future[int, int64], numTasks)
+
+			for i := 0; i < numTasks; i++ {
+				future, err := pool.Submit(i)
+				if err != nil {
+					t.Fatalf("submit task %d failed: %v", i, err)
+				}
+				futures[i] = future
+			}
+
+			// Collect half the results
+			for i := 0; i < numTasks/2; i++ {
+				value, _, err := futures[i].Get()
+				if err != nil {
+					t.Errorf("task %d failed: %v", i, err)
+				}
+				expected := i * i
+				if value != expected {
+					t.Errorf("task %d: expected %d, got %d", i, expected, value)
+				}
+			}
+
+			// Shutdown
+			err = pool.Shutdown(5 * time.Second)
 			if err != nil {
-				t.Errorf("task %d failed: %v", i, err)
+				t.Errorf("shutdown failed: %v", err)
 			}
-			expected := i * i
-			if value != expected {
-				t.Errorf("task %d: expected %d, got %d", i, expected, value)
-			}
-		}
 
-		// Shutdown
-		err = pool.Shutdown(5 * time.Second)
-		if err != nil {
-			t.Errorf("shutdown failed: %v", err)
-		}
-
-		// Collect remaining results
-		for i := numTasks / 2; i < numTasks; i++ {
-			value, _, err := futures[i].Get()
-			if err != nil {
-				t.Errorf("task %d failed: %v", i, err)
+			// Collect remaining results
+			for i := numTasks / 2; i < numTasks; i++ {
+				value, _, err := futures[i].Get()
+				if err != nil {
+					t.Errorf("task %d failed: %v", i, err)
+				}
+				expected := i * i
+				if value != expected {
+					t.Errorf("task %d: expected %d, got %d", i, expected, value)
+				}
 			}
-			expected := i * i
-			if value != expected {
-				t.Errorf("task %d: expected %d, got %d", i, expected, value)
-			}
-		}
-	})
+		})
+	}
 }
 
 func TestWorkerPool_Lifecycle_ContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	strategies := getAllStrategies(3)
 
-	pool := NewScheduler[int, int](WithWorkerCount(3))
+	for _, strategy := range strategies {
+		t.Run(strategy.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
 
-	processFn := func(ctx context.Context, task int) (int, error) {
-		select {
-		case <-time.After(200 * time.Millisecond):
-			return task, nil
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		}
+			pool := NewScheduler[int, int](strategy.opts...)
+
+			processFn := func(ctx context.Context, task int) (int, error) {
+				select {
+				case <-time.After(200 * time.Millisecond):
+					return task, nil
+				case <-ctx.Done():
+					return 0, ctx.Err()
+				}
+			}
+
+			err := pool.Start(ctx, processFn)
+			if err != nil {
+				t.Fatalf("start failed: %v", err)
+			}
+
+			// Submit tasks
+			numTasks := 10
+			futures := make([]*Future[int, int64], numTasks)
+			for i := 0; i < numTasks; i++ {
+				future, err := pool.Submit(i)
+				if err != nil {
+					t.Fatalf("submit task %d failed: %v", i, err)
+				}
+				futures[i] = future
+			}
+
+			// Cancel context
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+
+			// Wait a bit for cancellation to propagate
+			time.Sleep(100 * time.Millisecond)
+
+			// Shutdown
+			err = pool.Shutdown(time.Second)
+			if err != nil {
+				t.Errorf("shutdown failed: %v", err)
+			}
+
+			// Check that most futures have errors due to cancellation
+			// Use GetWithContext to avoid blocking indefinitely if context was cancelled
+			errorCount := 0
+			getCtx, getCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer getCancel()
+
+			for _, future := range futures {
+				_, _, err := future.GetWithContext(getCtx)
+				if err != nil {
+					errorCount++
+				}
+			}
+
+			// At least some tasks should have been cancelled
+			if errorCount == 0 {
+				t.Error("expected some tasks to be cancelled")
+			}
+
+			t.Logf("Cancelled tasks: %d out of %d", errorCount, numTasks)
+		})
 	}
-
-	err := pool.Start(ctx, processFn)
-	if err != nil {
-		t.Fatalf("start failed: %v", err)
-	}
-
-	// Submit tasks
-	numTasks := 10
-	futures := make([]*Future[int, int64], numTasks)
-	for i := 0; i < numTasks; i++ {
-		future, err := pool.Submit(i)
-		if err != nil {
-			t.Fatalf("submit task %d failed: %v", i, err)
-		}
-		futures[i] = future
-	}
-
-	// Cancel context
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-
-	// Wait a bit for cancellation to propagate
-	time.Sleep(100 * time.Millisecond)
-
-	// Shutdown
-	err = pool.Shutdown(time.Second)
-	if err != nil {
-		t.Errorf("shutdown failed: %v", err)
-	}
-
-	// Check that most futures have errors due to cancellation
-	// Use GetWithContext to avoid blocking indefinitely if context was cancelled
-	errorCount := 0
-	getCtx, getCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer getCancel()
-
-	for _, future := range futures {
-		_, _, err := future.GetWithContext(getCtx)
-		if err != nil {
-			errorCount++
-		}
-	}
-
-	// At least some tasks should have been cancelled
-	if errorCount == 0 {
-		t.Error("expected some tasks to be cancelled")
-	}
-
-	t.Logf("Cancelled tasks: %d out of %d", errorCount, numTasks)
 }
