@@ -146,19 +146,16 @@ func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Re
 	for range n {
 		result, ok := <-resChan
 		if !ok {
-			debugLog("collect: channel closed after %d/%d results", collected, n)
 			break
 		}
 		collected++
 		if result != nil && result.Error != nil && firstErr == nil {
-			debugLog("collect: error encountered for key %d: %v", result.Key, result.Error)
 			firstErr = result.Error
 		}
 		if result != nil {
 			onResult(result)
 		}
 	}
-	debugLog("collect: finished collecting %d/%d results, firstErr=%v", collected, n, firstErr)
 
 	return firstErr
 }
@@ -184,7 +181,6 @@ func startWorkers[T, R any](ctx context.Context, workers int, strategy schedulin
 	}
 
 	go func() {
-		debugLog("startWorkers: waiting for all workers to complete")
 		wg.Wait()
 		debugLog("startWorkers: all workers done, closing result channel")
 		close(resChan)
@@ -204,12 +200,10 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 	}
 
 	var shutdownOnce sync.Once
-	shutdown := func() {
-		debugLog("runScheduler: shutting down strategy")
-		s.Shutdown()
-	}
 	defer func() {
-		shutdownOnce.Do(shutdown)
+		shutdownOnce.Do(func() {
+			s.Shutdown()
+		})
 	}()
 
 	resChan := make(chan *Result[R, int64], len(tasks))
@@ -222,7 +216,9 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 	go func() {
 		<-ctx.Done()
 		debugLog("runScheduler: context cancelled, triggering strategy shutdown")
-		shutdownOnce.Do(shutdown)
+		shutdownOnce.Do(func() {
+			s.Shutdown()
+		})
 	}()
 
 	submitErrChan := make(chan error, 1)
@@ -232,11 +228,9 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 		debugLog("runScheduler: submitting batch of %d tasks", len(tasks))
 		submittedCount, err := s.SubmitBatch(tasks)
 		if err != nil {
-			debugLog("runScheduler: batch submit failed: %v", err)
 			submitErrChan <- err
 			return
 		}
-		debugLog("runScheduler: successfully submitted %d tasks", submittedCount)
 		submittedCountChan <- submittedCount
 	}()
 
@@ -246,10 +240,8 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 		return err
 	case submittedCount = <-submittedCountChan:
 	case <-ctx.Done():
-		debugLog("runScheduler: context cancelled during task submission")
 		submittedCount = len(tasks) // Will collect as many as available
 	}
 
-	debugLog("runScheduler: collecting results")
 	return collect(submittedCount, resChan, onResult)
 }
