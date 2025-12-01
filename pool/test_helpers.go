@@ -61,12 +61,12 @@ func getAllStrategiesWithOpts(workerCount int, additionalOpts ...WorkerPoolOptio
 	return baseStrategies
 }
 
-func runStrageyTest(t *testing.T, testFunc func(t *testing.T, s strategyConfig), workerCount int, additonalOpts ...WorkerPoolOption) {
-	strategies := getAllStrategiesWithOpts(workerCount, additonalOpts...)
+func runStrategyTest(t *testing.T, testFunc func(t *testing.T, s strategyConfig), workerCount int, additionalOpts ...WorkerPoolOption) {
+	strategies := getAllStrategiesWithOpts(workerCount, additionalOpts...)
 
-	for _, stragety := range strategies {
-		t.Run(stragety.name, func(t *testing.T) {
-			testFunc(t, stragety)
+	for _, strategy := range strategies {
+		t.Run(strategy.name, func(t *testing.T) {
+			testFunc(t, strategy)
 		})
 	}
 }

@@ -11,352 +11,308 @@ import (
 )
 
 func TestWorkerPool_Process_BasicFunctionality(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		tasks := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+		processFn := func(ctx context.Context, task int) (int, error) {
+			return task * 2, nil
+		}
 
-			tasks := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-			processFn := func(ctx context.Context, task int) (int, error) {
-				return task * 2, nil
+		results, err := pool.Process(context.Background(), tasks, processFn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(results) != len(tasks) {
+			t.Fatalf("expected %d results, got %d", len(tasks), len(results))
+		}
+
+		for i, task := range tasks {
+			expected := task * 2
+			if results[i] != expected {
+				t.Errorf("task %d: expected %d, got %d", i, expected, results[i])
 			}
-
-			results, err := pool.Process(context.Background(), tasks, processFn)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if len(results) != len(tasks) {
-				t.Fatalf("expected %d results, got %d", len(tasks), len(results))
-			}
-
-			for i, task := range tasks {
-				expected := task * 2
-				if results[i] != expected {
-					t.Errorf("task %d: expected %d, got %d", i, expected, results[i])
-				}
-			}
-		})
-	}
+		}
+	}, 4)
 }
 
 func TestWorkerPool_Process_EmptyTasks(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		tasks := []int{}
+		processFn := func(ctx context.Context, task int) (int, error) {
+			return task * 2, nil
+		}
 
-			tasks := []int{}
-			processFn := func(ctx context.Context, task int) (int, error) {
-				return task * 2, nil
-			}
+		results, err := pool.Process(context.Background(), tasks, processFn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-			results, err := pool.Process(context.Background(), tasks, processFn)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if len(results) != 0 {
-				t.Fatalf("expected 0 results, got %d", len(results))
-			}
-		})
-	}
+		if len(results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(results))
+		}
+	}, 4)
 }
 
 func TestWorkerPool_Process_SingleTask(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		tasks := []int{42}
+		processFn := func(ctx context.Context, task int) (int, error) {
+			return task * 2, nil
+		}
 
-			tasks := []int{42}
-			processFn := func(ctx context.Context, task int) (int, error) {
-				return task * 2, nil
-			}
+		results, err := pool.Process(context.Background(), tasks, processFn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-			results, err := pool.Process(context.Background(), tasks, processFn)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+		if len(results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(results))
+		}
 
-			if len(results) != 1 {
-				t.Fatalf("expected 1 result, got %d", len(results))
-			}
-
-			if results[0] != 84 {
-				t.Errorf("expected 84, got %d", results[0])
-			}
-		})
-	}
+		if results[0] != 84 {
+			t.Errorf("expected 84, got %d", results[0])
+		}
+	}, 4)
 }
 
 func TestWorkerPool_Process_ErrorHandling(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		tasks := []int{1, 2, 3, 4, 5}
+		expectedErr := errors.New("processing error")
 
-			tasks := []int{1, 2, 3, 4, 5}
-			expectedErr := errors.New("processing error")
-
-			processFn := func(ctx context.Context, task int) (int, error) {
-				if task == 3 {
-					return 0, expectedErr
-				}
-				return task * 2, nil
+		processFn := func(ctx context.Context, task int) (int, error) {
+			if task == 3 {
+				return 0, expectedErr
 			}
+			return task * 2, nil
+		}
 
-			_, err := pool.Process(context.Background(), tasks, processFn)
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
+		_, err := pool.Process(context.Background(), tasks, processFn)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
 
-			if !errors.Is(err, expectedErr) {
-				t.Errorf("expected error %v, got %v", expectedErr, err)
-			}
-		})
-	}
+		if !errors.Is(err, expectedErr) {
+			t.Errorf("expected error %v, got %v", expectedErr, err)
+		}
+	}, 4)
 }
 
 func TestWorkerPool_Process_ContextCancellation(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		ctx, cancel := context.WithCancel(context.Background())
+		tasks := make([]int, 100)
+		for i := range tasks {
+			tasks[i] = i
+		}
 
-			ctx, cancel := context.WithCancel(context.Background())
-			tasks := make([]int, 100)
-			for i := range tasks {
-				tasks[i] = i
+		var processedCount atomic.Int32
+		processFn := func(ctx context.Context, task int) (int, error) {
+			// Cancel after processing a few tasks
+			if processedCount.Add(1) == 5 {
+				cancel()
 			}
+			time.Sleep(10 * time.Millisecond) // Simulate work
+			return task * 2, nil
+		}
 
-			var processedCount atomic.Int32
-			processFn := func(ctx context.Context, task int) (int, error) {
-				// Cancel after processing a few tasks
-				if processedCount.Add(1) == 5 {
-					cancel()
-				}
-				time.Sleep(10 * time.Millisecond) // Simulate work
-				return task * 2, nil
-			}
+		_, err := pool.Process(ctx, tasks, processFn)
+		if err == nil {
+			t.Fatal("expected context cancellation error, got nil")
+		}
 
-			_, err := pool.Process(ctx, tasks, processFn)
-			if err == nil {
-				t.Fatal("expected context cancellation error, got nil")
-			}
-
-			if !errors.Is(err, context.Canceled) {
-				t.Errorf("expected context.Canceled, got %v", err)
-			}
-		})
-	}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled, got %v", err)
+		}
+	}, 4)
 }
 
 func TestWorkerPool_Process_ContextTimeout(t *testing.T) {
-	strategies := getAllStrategies(2)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-			defer cancel()
+		tasks := []int{1, 2, 3, 4, 5}
+		processFn := func(ctx context.Context, task int) (int, error) {
+			time.Sleep(100 * time.Millisecond) // Exceed timeout
+			return task * 2, nil
+		}
 
-			tasks := []int{1, 2, 3, 4, 5}
-			processFn := func(ctx context.Context, task int) (int, error) {
-				time.Sleep(100 * time.Millisecond) // Exceed timeout
-				return task * 2, nil
-			}
+		_, err := pool.Process(ctx, tasks, processFn)
+		if err == nil {
+			t.Fatal("expected timeout error, got nil")
+		}
 
-			_, err := pool.Process(ctx, tasks, processFn)
-			if err == nil {
-				t.Fatal("expected timeout error, got nil")
-			}
-
-			if !errors.Is(err, context.DeadlineExceeded) {
-				t.Errorf("expected context.DeadlineExceeded, got %v", err)
-			}
-		})
-	}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("expected context.DeadlineExceeded, got %v", err)
+		}
+	}, 2)
 }
 
 func TestWorkerPool_Process_PanicRecovery(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
-
-			tasks := []int{1, 2, 3, 4, 5}
-			processFn := func(ctx context.Context, task int) (int, error) {
-				if task == 3 {
-					panic("intentional panic")
-				}
-				return task * 2, nil
+		tasks := []int{1, 2, 3, 4, 5}
+		processFn := func(ctx context.Context, task int) (int, error) {
+			if task == 3 {
+				panic("intentional panic")
 			}
+			return task * 2, nil
+		}
 
-			_, err := pool.Process(context.Background(), tasks, processFn)
-			if err == nil {
-				t.Fatal("expected panic recovery error, got nil")
-			}
+		_, err := pool.Process(context.Background(), tasks, processFn)
+		if err == nil {
+			t.Fatal("expected panic recovery error, got nil")
+		}
 
-			errStr := err.Error()
-			if !contains(errStr, "worker panic") || !contains(errStr, "intentional panic") {
-				t.Errorf("expected panic recovery error message, got: %v", err)
-			}
-		})
-	}
+		errStr := err.Error()
+		if !contains(errStr, "worker panic") || !contains(errStr, "intentional panic") {
+			t.Errorf("expected panic recovery error message, got: %v", err)
+		}
+	}, 4)
 }
 
 func TestWorkerPool_Process_Concurrency(t *testing.T) {
 	workerCount := 4
-	strategies := getAllStrategies(workerCount)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		tasks := make([]int, 100)
+		for i := range tasks {
+			tasks[i] = i
+		}
 
-			tasks := make([]int, 100)
-			for i := range tasks {
-				tasks[i] = i
-			}
+		var activeWorkers atomic.Int32
+		var maxConcurrent atomic.Int32
 
-			var activeWorkers atomic.Int32
-			var maxConcurrent atomic.Int32
+		processFn := func(ctx context.Context, task int) (int, error) {
+			current := activeWorkers.Add(1)
+			defer activeWorkers.Add(-1)
 
-			processFn := func(ctx context.Context, task int) (int, error) {
-				current := activeWorkers.Add(1)
-				defer activeWorkers.Add(-1)
-
-				// Track max concurrent workers
-				for {
-					max := maxConcurrent.Load()
-					if current <= max || maxConcurrent.CompareAndSwap(max, current) {
-						break
-					}
+			// Track max concurrent workers
+			for {
+				max := maxConcurrent.Load()
+				if current <= max || maxConcurrent.CompareAndSwap(max, current) {
+					break
 				}
-
-				time.Sleep(10 * time.Millisecond) // Simulate work
-				return task * 2, nil
 			}
 
-			results, err := pool.Process(context.Background(), tasks, processFn)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			time.Sleep(10 * time.Millisecond) // Simulate work
+			return task * 2, nil
+		}
 
-			if len(results) != len(tasks) {
-				t.Fatalf("expected %d results, got %d", len(tasks), len(results))
-			}
+		results, err := pool.Process(context.Background(), tasks, processFn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-			// Verify we actually used concurrent workers
-			if maxConcurrent.Load() < int32(workerCount) {
-				t.Errorf("expected at least %d concurrent workers, got %d", workerCount, maxConcurrent.Load())
-			}
-		})
-	}
+		if len(results) != len(tasks) {
+			t.Fatalf("expected %d results, got %d", len(tasks), len(results))
+		}
+
+		// Verify we actually used concurrent workers
+		if maxConcurrent.Load() < int32(workerCount) {
+			t.Errorf("expected at least %d concurrent workers, got %d", workerCount, maxConcurrent.Load())
+		}
+	}, workerCount)
 }
 
 func TestWorkerPool_ProcessMap_BasicFunctionality(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		tasks := map[string]int{
+			"a": 1,
+			"b": 2,
+			"c": 3,
+			"d": 4,
+			"e": 5,
+		}
 
-			tasks := map[string]int{
-				"a": 1,
-				"b": 2,
-				"c": 3,
-				"d": 4,
-				"e": 5,
+		processFn := func(ctx context.Context, task int) (int, error) {
+			return task * 2, nil
+		}
+
+		results, err := pool.ProcessMap(context.Background(), tasks, processFn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(results) != len(tasks) {
+			t.Fatalf("expected %d results, got %d", len(tasks), len(results))
+		}
+
+		for key, task := range tasks {
+			expected := task * 2
+			if result, ok := results[key]; !ok {
+				t.Errorf("missing result for key %s", key)
+			} else if result != expected {
+				t.Errorf("key %s: expected %d, got %d", key, expected, result)
 			}
-
-			processFn := func(ctx context.Context, task int) (int, error) {
-				return task * 2, nil
-			}
-
-			results, err := pool.ProcessMap(context.Background(), tasks, processFn)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if len(results) != len(tasks) {
-				t.Fatalf("expected %d results, got %d", len(tasks), len(results))
-			}
-
-			for key, task := range tasks {
-				expected := task * 2
-				if result, ok := results[key]; !ok {
-					t.Errorf("missing result for key %s", key)
-				} else if result != expected {
-					t.Errorf("key %s: expected %d, got %d", key, expected, result)
-				}
-			}
-		})
-	}
+		}
+	}, 4)
 }
 
 func TestWorkerPool_ProcessMap_EmptyMap(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		tasks := map[string]int{}
+		processFn := func(ctx context.Context, task int) (int, error) {
+			return task * 2, nil
+		}
 
-			tasks := map[string]int{}
-			processFn := func(ctx context.Context, task int) (int, error) {
-				return task * 2, nil
-			}
+		results, err := pool.ProcessMap(context.Background(), tasks, processFn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-			results, err := pool.ProcessMap(context.Background(), tasks, processFn)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if len(results) != 0 {
-				t.Fatalf("expected 0 results, got %d", len(results))
-			}
-		})
-	}
+		if len(results) != 0 {
+			t.Fatalf("expected 0 results, got %d", len(results))
+		}
+	}, 4)
 }
 
 func TestWorkerPool_ProcessMap_ErrorHandling(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		tasks := map[string]int{
+			"a": 1,
+			"b": 2,
+			"c": 3,
+		}
 
-			tasks := map[string]int{
-				"a": 1,
-				"b": 2,
-				"c": 3,
+		expectedErr := errors.New("processing error")
+		processFn := func(ctx context.Context, task int) (int, error) {
+			if task == 2 {
+				return 0, expectedErr
 			}
+			return task * 2, nil
+		}
 
-			expectedErr := errors.New("processing error")
-			processFn := func(ctx context.Context, task int) (int, error) {
-				if task == 2 {
-					return 0, expectedErr
-				}
-				return task * 2, nil
-			}
+		_, err := pool.ProcessMap(context.Background(), tasks, processFn)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
 
-			_, err := pool.ProcessMap(context.Background(), tasks, processFn)
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-
-			if !errors.Is(err, expectedErr) {
-				t.Errorf("expected error %v, got %v", expectedErr, err)
-			}
-		})
-	}
+		if !errors.Is(err, expectedErr) {
+			t.Errorf("expected error %v, got %v", expectedErr, err)
+		}
+	}, 4)
 }
 
 func TestWorkerPool_WithOptions(t *testing.T) {
@@ -408,37 +364,33 @@ func TestWorkerPool_WithOptions(t *testing.T) {
 }
 
 func TestWorkerPool_Process_OrderPreservation(t *testing.T) {
-	strategies := getAllStrategies(4)
+	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
+		pool := NewWorkerPool[int, int](s.opts...)
 
-	for _, strategy := range strategies {
-		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
+		tasks := make([]int, 100)
+		for i := range tasks {
+			tasks[i] = i
+		}
 
-			tasks := make([]int, 100)
-			for i := range tasks {
-				tasks[i] = i
+		processFn := func(ctx context.Context, task int) (int, error) {
+			// Add variable delay to test order preservation
+			time.Sleep(time.Duration(100-task) * time.Microsecond)
+			return task * 2, nil
+		}
+
+		results, err := pool.Process(context.Background(), tasks, processFn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Verify order is preserved
+		for i, task := range tasks {
+			expected := task * 2
+			if results[i] != expected {
+				t.Errorf("index %d: expected %d, got %d (order not preserved)", i, expected, results[i])
 			}
-
-			processFn := func(ctx context.Context, task int) (int, error) {
-				// Add variable delay to test order preservation
-				time.Sleep(time.Duration(100-task) * time.Microsecond)
-				return task * 2, nil
-			}
-
-			results, err := pool.Process(context.Background(), tasks, processFn)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			// Verify order is preserved
-			for i, task := range tasks {
-				expected := task * 2
-				if results[i] != expected {
-					t.Errorf("index %d: expected %d, got %d (order not preserved)", i, expected, results[i])
-				}
-			}
-		})
-	}
+		}
+	}, 4)
 }
 
 func TestWorkerPool_Process_HighConcurrency(t *testing.T) {
@@ -448,6 +400,34 @@ func TestWorkerPool_Process_HighConcurrency(t *testing.T) {
 
 	workerCount := 16
 	taskCount := 10000
+
+	testFunc := func(t *testing.T, strategy strategyConfig) {
+		pool := NewWorkerPool[int, int](strategy.opts...)
+
+		tasks := make([]int, taskCount)
+		for i := range tasks {
+			tasks[i] = i
+		}
+
+		var counter atomic.Int64
+		processFn := func(ctx context.Context, task int) (int, error) {
+			counter.Add(1)
+			return task * 2, nil
+		}
+
+		results, err := pool.Process(context.Background(), tasks, processFn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(results) != taskCount {
+			t.Fatalf("expected %d results, got %d", taskCount, len(results))
+		}
+
+		if counter.Load() != int64(taskCount) {
+			t.Errorf("expected %d tasks processed, got %d", taskCount, counter.Load())
+		}
+	}
 
 	strategies := []strategyConfig{
 		{
@@ -491,31 +471,7 @@ func TestWorkerPool_Process_HighConcurrency(t *testing.T) {
 
 	for _, strategy := range strategies {
 		t.Run(strategy.name, func(t *testing.T) {
-			pool := NewWorkerPool[int, int](strategy.opts...)
-
-			tasks := make([]int, taskCount)
-			for i := range tasks {
-				tasks[i] = i
-			}
-
-			var counter atomic.Int64
-			processFn := func(ctx context.Context, task int) (int, error) {
-				counter.Add(1)
-				return task * 2, nil
-			}
-
-			results, err := pool.Process(context.Background(), tasks, processFn)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if len(results) != taskCount {
-				t.Fatalf("expected %d results, got %d", taskCount, len(results))
-			}
-
-			if counter.Load() != int64(taskCount) {
-				t.Errorf("expected %d tasks processed, got %d", taskCount, counter.Load())
-			}
+			testFunc(t, strategy)
 		})
 	}
 }
