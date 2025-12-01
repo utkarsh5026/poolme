@@ -280,7 +280,7 @@ func (wp *WorkerPool[T, R]) Process(
 	processFn ProcessFunc[T, R],
 ) ([]R, error) {
 	sp := newSliceProcessor(tasks, processFn, wp.conf)
-	return sp.Process(ctx, min(wp.conf.WorkerCount, len(tasks)))
+	return sp.Process(ctx)
 }
 
 // ProcessMap executes a batch of tasks from a map concurrently using a pool of workers.
@@ -308,5 +308,5 @@ func (wp *WorkerPool[T, R]) ProcessMap(
 	processFn ProcessFunc[T, R],
 ) (map[string]R, error) {
 	mp := newMapProcessor(tasks, processFn, wp)
-	return mp.Process(ctx, min(wp.conf.WorkerCount, len(tasks)))
+	return mp.Process(ctx)
 }

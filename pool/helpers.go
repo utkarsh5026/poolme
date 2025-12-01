@@ -44,6 +44,7 @@ func calcBackoffDelay(initialDelay time.Duration, attemptNumber int) time.Durati
 //   - beforeTaskStart: Function to be called before each task starts (or nil if not configured).
 //   - onTaskEnd: Function to be called after each task ends (or nil if not configured).
 //   - onRetry: Function to be called on every retry attempt (or nil if not configured).
+//   - affinityFunc: Function to map tasks to affinity keys for worker routing (or nil if not configured).
 //
 // Panics:
 //
@@ -56,42 +57,49 @@ func checkfuncs[T any, R any](
 	beforeTaskStart func(T),
 	onTaskEnd func(T, R, error),
 	onRetry func(T, int, error),
+	affinityFunc func(T) string,
 ) {
 	if cfg.beforeTaskStart != nil {
-		if cfg.beforeTaskStartType != expectedTaskType {
-			panic(fmt.Sprintf("WithBeforeTaskStart hook expects task type %s, but pool processes type %s",
-				cfg.beforeTaskStartType, expectedTaskType))
-		}
+		checkFuncType("WithBeforeTaskStart", cfg.beforeTaskStartType, expectedTaskType)
 		beforeTaskStart = func(task T) {
 			cfg.beforeTaskStart(task)
 		}
 	}
 
 	if cfg.onTaskEnd != nil {
-		if cfg.onTaskEndTaskType != expectedTaskType {
-			panic(fmt.Sprintf("WithOnTaskEnd hook expects task type %s, but pool processes type %s",
-				cfg.onTaskEndTaskType, expectedTaskType))
-		}
-		if cfg.onTaskEndResultType != expectedResultType {
-			panic(fmt.Sprintf("WithOnTaskEnd hook expects result type %s, but pool produces type %s",
-				cfg.onTaskEndResultType, expectedResultType))
-		}
+		checkFuncType("WithOnTaskEnd", cfg.onTaskEndTaskType, expectedTaskType)
+		checkFuncType("WithOnTaskEnd", cfg.onTaskEndResultType, expectedResultType)
 		onTaskEnd = func(task T, result R, err error) {
 			cfg.onTaskEnd(task, result, err)
 		}
 	}
 
 	if cfg.onRetry != nil {
-		if cfg.onRetryType != expectedTaskType {
-			panic(fmt.Sprintf("WithOnEachAttempt hook expects task type %s, but pool processes type %s",
-				cfg.onRetryType, expectedTaskType))
-		}
+		checkFuncType("WithOnEachAttempt", cfg.onRetryType, expectedTaskType)
 		onRetry = func(task T, attempt int, err error) {
 			cfg.onRetry(task, attempt, err)
 		}
 	}
 
-	return beforeTaskStart, onTaskEnd, onRetry
+	if cfg.affinityFunc != nil {
+		checkFuncType("WithAffinity", cfg.affinityFuncType, expectedTaskType)
+		affinityFunc = func(task T) string {
+			return cfg.affinityFunc(task)
+		}
+	}
+
+	return beforeTaskStart, onTaskEnd, onRetry, affinityFunc
+}
+
+// checkFuncType verifies that the user-supplied hook function's type matches the expected type.
+//
+// Panics if the actual type does not match the expected type, indicating
+// a configuration or generic type mismatch in user-supplied hooks.
+func checkFuncType(funcName, actual, expected string) {
+	if actual != expected {
+		panic(fmt.Sprintf("%s hook expects result type %s, but pool produces type %s",
+			funcName, actual, expected))
+	}
 }
 
 // waitUntil blocks until either the done channel is closed or the timeout is reached.
@@ -149,7 +157,7 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *scheduler.ProcessorConfig
 	expectedTaskType := fmt.Sprintf("%T", zeroT)
 	expectedResultType := fmt.Sprintf("%T", zeroR)
 
-	beforeTaskStart, onTaskEnd, onRetry := checkfuncs[T, R](cfg, expectedTaskType, expectedResultType)
+	beforeTaskStart, onTaskEnd, onRetry, affinityFunc := checkfuncs[T, R](cfg, expectedTaskType, expectedResultType)
 
 	return &scheduler.ProcessorConfig[T, R]{
 		WorkerCount:        cfg.workerCount,
@@ -176,5 +184,6 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *scheduler.ProcessorConfig
 		}(),
 		MpmcBounded:  cfg.mpmcBounded,
 		MpmcCapacity: cfg.mpmcCapacity,
+		AffinityFunc: affinityFunc,
 	}
 }

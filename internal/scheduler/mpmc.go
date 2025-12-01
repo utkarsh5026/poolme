@@ -302,6 +302,10 @@ func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor types.
 	quitCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	drainFunc := func() {
+		s.drainQueue(ctx, executor, h)
+	}
+
 	go func() {
 		select {
 		case <-s.quit:
@@ -315,20 +319,17 @@ func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor types.
 		task, err := s.queue.Dequeue(quitCtx)
 		if err != nil {
 			if err == ErrQueueClosed || err == context.Canceled {
-				s.drainQueue(ctx, executor, h)
+				drainFunc()
 				return nil
 			}
 			if ctx.Err() != nil {
-				s.drainQueue(ctx, executor, h)
+				drainFunc()
 				return ctx.Err()
 			}
 			continue
 		}
 
-		err = executeSubmitted(ctx, task, s.conf, executor, h)
-		if err := handleExecutionError(err, s.conf.ContinueOnErr, func() {
-			s.drainQueue(ctx, executor, h)
-		}); err != nil {
+		if err := handleWithCare(ctx, task, s.conf, executor, h, drainFunc); err != nil {
 			return err
 		}
 	}

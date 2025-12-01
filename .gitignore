@@ -38,3 +38,5 @@ docs/.vitepress/dist/
 
 *.txt
 *.prof
+
+benchmark-data/

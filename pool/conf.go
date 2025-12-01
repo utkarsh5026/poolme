@@ -99,6 +99,10 @@ type workerPoolConfig struct {
 	fusionWindow    time.Duration
 	fusionBatchSize int
 
+	// Task affinity configuration
+	affinityFunc     func(any) string
+	affinityFuncType string
+
 	// Hook functions stored as any for flexibility
 	beforeTaskStart     func(any)
 	beforeTaskStartType string
@@ -559,6 +563,65 @@ func WithTaskFusion(window time.Duration, batchSize int) WorkerPoolOption {
 			cfg.fusionWindow = window
 			cfg.fusionBatchSize = batchSize
 		}
+	}
+}
+
+// WithAffinity configures task affinity to ensure tasks with the same affinity key
+// are routed to the same worker. This is useful for workloads where task locality matters,
+// such as caching, stateful processing, or reducing lock contention.
+//
+// The affinityFunc receives a task and returns a string key. Tasks with the same key
+// will always be processed by the same worker using a fast FNV-1a hash function.
+//
+// Task affinity provides:
+//   - Consistent routing of related tasks to the same worker
+//   - Better cache locality for stateful processing
+//   - Reduced lock contention when tasks share resources
+//   - Predictable worker assignment for debugging and monitoring
+//
+// Best for:
+//   - Workloads with per-key state (e.g., session processing, user-specific tasks)
+//   - Tasks that benefit from warm caches (e.g., database connections per tenant)
+//   - Scenarios where task ordering matters for specific keys
+//   - Reducing coordination overhead between workers
+//
+// Example (route by user ID):
+//
+//	type UserTask struct {
+//	    UserID int
+//	    Action string
+//	}
+//	pool := NewWorkerPool[UserTask, string](
+//	    WithWorkerCount(8),
+//	    WithAffinity(func(task UserTask) string {
+//	        return fmt.Sprintf("user-%d", task.UserID)
+//	    }),
+//	)
+//
+// Example (route by tenant):
+//
+//	type Request struct {
+//	    TenantID string
+//	    Data     []byte
+//	}
+//	pool := NewWorkerPool[Request, Response](
+//	    WithAffinity(func(req Request) string {
+//	        return req.TenantID
+//	    }),
+//	)
+func WithAffinity[T any](affinityFunc func(task T) string) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		if affinityFunc == nil {
+			return
+		}
+		cfg.affinityFunc = func(task any) string {
+			if t, ok := task.(T); ok {
+				return affinityFunc(t)
+			}
+			return ""
+		}
+		var zero T
+		cfg.affinityFuncType = getTypeName(zero)
 	}
 }
 

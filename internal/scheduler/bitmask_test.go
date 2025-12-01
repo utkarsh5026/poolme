@@ -38,8 +38,10 @@ func TestBitmaskStrategy_New(t *testing.T) {
 		if len(strategy.workerChans) != 4 {
 			t.Errorf("expected 4 worker channels, got %d", len(strategy.workerChans))
 		}
-		if cap(strategy.globalQueue) != 10 {
-			t.Errorf("expected global queue capacity 10, got %d", cap(strategy.globalQueue))
+		// Global queue size is max(TaskBuffer, WorkerCount*10)
+		expectedQueueSize := max(10, 4*10) // max(10, 40) = 40
+		if cap(strategy.globalQueue) != expectedQueueSize {
+			t.Errorf("expected global queue capacity %d, got %d", expectedQueueSize, cap(strategy.globalQueue))
 		}
 	})
 
@@ -64,10 +66,11 @@ func TestBitmaskStrategy_New(t *testing.T) {
 
 		strategy := newBitmaskStrategy(conf)
 
-		// All workers should start as idle (mask should be 0)
+		// All workers should start as idle (all bits set for 8 workers)
+		expectedMask := uint64((1 << 8) - 1) // 0xFF (all 8 bits set)
 		mask := strategy.idleMask.Load()
-		if mask != 0 {
-			t.Errorf("expected initial idle mask 0, got %d", mask)
+		if mask != expectedMask {
+			t.Errorf("expected initial idle mask %d (0x%X), got %d (0x%X)", expectedMask, expectedMask, mask, mask)
 		}
 	})
 }
@@ -550,10 +553,8 @@ func TestBitmaskStrategy_AnnounceIdle(t *testing.T) {
 
 		// Initially all workers busy
 		strategy.idleMask.Store(0)
-
-		// Worker 3 announces idle
 		myBit := uint64(1) << 3
-		strategy.announceIdle(myBit)
+		strategy.announceIdle(3)
 
 		// Check that bit 3 is set
 		mask := strategy.idleMask.Load()
@@ -573,7 +574,7 @@ func TestBitmaskStrategy_AnnounceIdle(t *testing.T) {
 		strategy.idleMask.Store(myBit) // Worker 2 already idle
 
 		// Announce idle again (should not panic)
-		strategy.announceIdle(myBit)
+		strategy.announceIdle(2)
 
 		// Bit should still be set
 		mask := strategy.idleMask.Load()
@@ -598,8 +599,7 @@ func TestBitmaskStrategy_AnnounceIdle(t *testing.T) {
 		for i := 0; i < 8; i++ {
 			go func(workerID int) {
 				defer wg.Done()
-				myBit := uint64(1) << workerID
-				strategy.announceIdle(myBit)
+				strategy.announceIdle(workerID)
 			}(i)
 		}
 
@@ -766,7 +766,7 @@ func TestBitmaskStrategy_EdgeCases(t *testing.T) {
 		strategy.idleMask.Store(^uint64(0)) // All bits set
 
 		// Submit 64 tasks
-		for i := 0; i < 64; i++ {
+		for i := range 64 {
 			err := strategy.Submit(createSimpleTask(i, int64(i)))
 			if err != nil {
 				t.Errorf("task %d: unexpected error: %v", i, err)
@@ -804,10 +804,9 @@ func BenchmarkBitmaskStrategy_Submit(b *testing.B) {
 	task := createSimpleTask(1, 1)
 
 	// Drain channels in background
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := b.Context()
 
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		go func(ch chan *types.SubmittedTask[simpleTask, int]) {
 			for {
 				select {
@@ -829,8 +828,7 @@ func BenchmarkBitmaskStrategy_Submit(b *testing.B) {
 		}
 	}()
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		_ = strategy.Submit(task)
 		// Reset some workers to idle to keep benchmark realistic
 		if i%100 == 0 {

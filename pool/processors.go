@@ -32,19 +32,19 @@ func newSliceProcessor[T, R any](tasks []T, processFn ProcessFunc[T, R], conf *p
 
 // Process processes the slice of tasks using the specified number of workers and returns
 // a results slice (in the original order) or the first error encountered. Safe for repeated calls.
-func (s *sliceProcessor[T, R]) Process(ctx context.Context, workerCount int) ([]R, error) {
+func (s *sliceProcessor[T, R]) Process(ctx context.Context) ([]R, error) {
 	var results []R
 	var processErr error
 
 	s.once.Do(func() {
-		results, processErr = s.process(ctx, workerCount)
+		results, processErr = s.process(ctx)
 	})
 
 	return results, processErr
 }
 
 // process executes the internal flow using scheduling strategies with result handlers.
-func (s *sliceProcessor[T, R]) process(ctx context.Context, workerCount int) ([]R, error) {
+func (s *sliceProcessor[T, R]) process(ctx context.Context) ([]R, error) {
 	if len(s.tasks) == 0 {
 		return []R{}, nil
 	}
@@ -61,7 +61,7 @@ func (s *sliceProcessor[T, R]) process(ctx context.Context, workerCount int) ([]
 		orderMap[int64(i)] = i
 	}
 
-	err := runScheduler(ctx, workerCount, s.conf, submittedTasks, s.processFn, func(r *Result[R, int64]) {
+	err := runScheduler(ctx, s.conf, submittedTasks, s.processFn, func(r *Result[R, int64]) {
 		if idx, ok := orderMap[r.Key]; ok && idx >= 0 && idx < len(results) {
 			results[idx] = r.Value
 		}
@@ -94,19 +94,19 @@ func newMapProcessor[T, R any](tasks map[string]T, processFn ProcessFunc[T, R], 
 
 // Process launches workers to process the map's tasks in parallel and collects results in a keyed map.
 // Safe for repeated calls; only the first call will execute due to sync.Once.
-func (m *mapProcessor[T, R]) Process(ctx context.Context, workerCount int) (map[string]R, error) {
+func (m *mapProcessor[T, R]) Process(ctx context.Context) (map[string]R, error) {
 	var r map[string]R = make(map[string]R)
 	var err error
 
 	m.once.Do(func() {
-		r, err = m.process(ctx, workerCount)
+		r, err = m.process(ctx)
 	})
 
 	return r, err
 }
 
 // process coordinates worker startup, task production, and keyed result aggregation using strategies.
-func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[string]R, error) {
+func (m *mapProcessor[T, R]) process(ctx context.Context) (map[string]R, error) {
 	if len(m.tasks) == 0 {
 		return map[string]R{}, nil
 	}
@@ -126,7 +126,7 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 		taskID++
 	}
 
-	err := runScheduler(ctx, workerCount, m.pool.conf, submittedTasks, m.processFn, func(r *Result[R, int64]) {
+	err := runScheduler(ctx, m.pool.conf, submittedTasks, m.processFn, func(r *Result[R, int64]) {
 		if stringKey, ok := keyMap[r.Key]; ok {
 			results[stringKey] = r.Value
 		}
@@ -140,19 +140,25 @@ func (m *mapProcessor[T, R]) process(ctx context.Context, workerCount int) (map[
 // The function continues collecting all n results even after encountering an error,
 // ensuring proper cleanup and allowing the callback to process all results.
 func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Result[R, int64])) error {
+	debugLog("collect: expecting %d results", n)
 	var firstErr error
+	collected := 0
 	for range n {
 		result, ok := <-resChan
 		if !ok {
+			debugLog("collect: channel closed after %d/%d results", collected, n)
 			break
 		}
+		collected++
 		if result != nil && result.Error != nil && firstErr == nil {
+			debugLog("collect: error encountered for key %d: %v", result.Key, result.Error)
 			firstErr = result.Error
 		}
 		if result != nil {
 			onResult(result)
 		}
 	}
+	debugLog("collect: finished collecting %d/%d results, firstErr=%v", collected, n, firstErr)
 
 	return firstErr
 }
@@ -163,17 +169,24 @@ func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Re
 // process function and result handler. The function automatically closes the result channel
 // once all workers have completed.
 func startWorkers[T, R any](ctx context.Context, workers int, strategy schedulingStrategy[T, R], f ProcessFunc[T, R], h resultHandler[T, R], resChan chan *Result[R, int64]) {
+	debugLog("startWorkers: spawning %d workers", workers)
 	var wg sync.WaitGroup
 	wg.Add(workers)
 	for i := range workers {
 		go func(workerID int) {
-			defer wg.Done()
+			debugLog("worker %d: started", workerID)
+			defer func() {
+				debugLog("worker %d: exiting", workerID)
+				wg.Done()
+			}()
 			_ = strategy.Worker(ctx, int64(workerID), f, h)
 		}(i)
 	}
 
 	go func() {
+		debugLog("startWorkers: waiting for all workers to complete")
 		wg.Wait()
+		debugLog("startWorkers: all workers done, closing result channel")
 		close(resChan)
 	}()
 }
@@ -182,23 +195,61 @@ func startWorkers[T, R any](ctx context.Context, workers int, strategy schedulin
 //
 // This function creates the scheduling strategy, submits all tasks, starts workers, and collects
 // results. It automatically handles strategy cleanup and error propagation.
-func runScheduler[T, R any](ctx context.Context, workerCount int, conf *processorConfig[T, R], tasks []*submittedTask[T, R], p ProcessFunc[T, R], onResult func(r *Result[R, int64])) error {
+func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], tasks []*submittedTask[T, R], p ProcessFunc[T, R], onResult func(r *Result[R, int64])) error {
+	debugLog("runScheduler: creating scheduling strategy for %d tasks", len(tasks))
 	s, err := scheduler.CreateSchedulingStrategy(conf, nil)
 	if err != nil {
+		debugLog("runScheduler: failed to create strategy: %v", err)
 		return err
 	}
-	defer s.Shutdown()
+
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		debugLog("runScheduler: shutting down strategy")
+		s.Shutdown()
+	}
+	defer func() {
+		shutdownOnce.Do(shutdown)
+	}()
 
 	resChan := make(chan *Result[R, int64], len(tasks))
 	handler := func(task *submittedTask[T, R], result *Result[R, int64]) {
 		resChan <- result
 	}
 
-	submittedCount, err := s.SubmitBatch(tasks)
-	if err != nil {
+	startWorkers(ctx, conf.WorkerCount, s, p, handler, resChan)
+
+	go func() {
+		<-ctx.Done()
+		debugLog("runScheduler: context cancelled, triggering strategy shutdown")
+		shutdownOnce.Do(shutdown)
+	}()
+
+	submitErrChan := make(chan error, 1)
+	submittedCountChan := make(chan int, 1)
+
+	go func() {
+		debugLog("runScheduler: submitting batch of %d tasks", len(tasks))
+		submittedCount, err := s.SubmitBatch(tasks)
+		if err != nil {
+			debugLog("runScheduler: batch submit failed: %v", err)
+			submitErrChan <- err
+			return
+		}
+		debugLog("runScheduler: successfully submitted %d tasks", submittedCount)
+		submittedCountChan <- submittedCount
+	}()
+
+	var submittedCount int
+	select {
+	case err := <-submitErrChan:
 		return err
+	case submittedCount = <-submittedCountChan:
+	case <-ctx.Done():
+		debugLog("runScheduler: context cancelled during task submission")
+		submittedCount = len(tasks) // Will collect as many as available
 	}
 
-	startWorkers(ctx, workerCount, s, p, handler, resChan)
+	debugLog("runScheduler: collecting results")
 	return collect(submittedCount, resChan, onResult)
 }
