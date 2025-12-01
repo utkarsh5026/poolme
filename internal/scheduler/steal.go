@@ -194,6 +194,8 @@ type workSteal[T any, R any] struct {
 	stealSeed                 atomic.Uint64 // Round-robin counter for task distribution
 	workerCount, maxLocalSize int
 	quit                      chan signal
+	stopOnErr                 chan struct{} // Signal workers to stop on first error
+	stopOnce                  sync.Once     // Ensure stopOnErr is only closed once
 }
 
 func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConfig[T, R]) *workSteal[T, R] {
@@ -202,6 +204,7 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConf
 		globalQueue:  newWSDeque[T, R](maxLocalSize),
 		maxLocalSize: maxLocalSize,
 		quit:         make(chan signal),
+		stopOnErr:    make(chan struct{}),
 		workerQueues: make([]*wsDeque[T, R], n),
 		workerCount:  n,
 		conf:         conf,
@@ -232,11 +235,15 @@ func (s *workSteal[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, 
 		return 0, nil
 	}
 
+	// Push all tasks to global queue under a single lock
+	// This is simpler and avoids the complexity of direct worker queue distribution
+	// Workers will pull in batches from the global queue
 	s.glock.Lock()
 	for _, t := range tasks {
 		s.globalQueue.PushBack(t)
 	}
 	s.glock.Unlock()
+
 	return len(tasks), nil
 }
 
@@ -268,6 +275,9 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 		for range fastCheckCounter {
 			if t := localQueue.PopBack(); t != nil {
 				if err := executeTask(t); err != nil {
+					// Signal other workers to stop on error
+					s.stopOnce.Do(func() { close(s.stopOnErr) })
+					drain()
 					return err
 				}
 				missCount = 0
@@ -275,24 +285,41 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 			}
 		}
 
-		if t := s.globalQueue.PopFront(); t != nil {
-			if err := executeTask(t); err != nil {
-				return err
-			}
-			missCount = 0
-
+		s.glock.Lock()
+		t := s.globalQueue.PopFront()
+		if t != nil {
+			batch := []*types.SubmittedTask[T, R]{t}
 			for range batchStealSize - 1 {
 				if task := s.globalQueue.PopFront(); task != nil {
-					localQueue.PushBack(task)
+					batch = append(batch, task)
 				} else {
 					break
 				}
 			}
+			s.glock.Unlock()
+
+			// Execute first task
+			if err := executeTask(batch[0]); err != nil {
+				// Signal other workers to stop on error
+				s.stopOnce.Do(func() { close(s.stopOnErr) })
+				drain()
+				return err
+			}
+			missCount = 0
+
+			// Put rest in local queue
+			for _, task := range batch[1:] {
+				localQueue.PushBack(task)
+			}
 			continue
 		}
+		s.glock.Unlock()
 
 		if t := s.steal(int(workerID)); t != nil {
 			if err := executeTask(t); err != nil {
+				// Signal other workers to stop on error
+				s.stopOnce.Do(func() { close(s.stopOnErr) })
+				drain()
 				return err
 			}
 			missCount = 0
@@ -300,6 +327,15 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 		}
 
 		missCount++
+
+		// Check if we should stop due to error signal
+		select {
+		case <-s.stopOnErr:
+			drain()
+			return nil
+		default:
+		}
+
 		switch {
 		case missCount <= 50:
 			// Active spinning - keep checking aggressively under high load
@@ -316,7 +352,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 	}
 }
 
-// checkQuit checks for cancellation signals via context or explicit quit channel.
+// checkQuit checks for cancellation signals via context, explicit quit channel, or stop-on-error signal.
 // If a cancellation is detected, it drains the worker's local queue to ensure
 // no tasks are abandoned, then returns the appropriate error (ctx.Err() or nil).
 // If no quit condition occurs, it returns nil and work may continue.
@@ -328,6 +364,9 @@ func (s *workSteal[T, R]) checkQuit(ctx context.Context, drainFunc func()) error
 	case <-s.quit:
 		drainFunc()
 		return ErrSchedulerClosed
+	case <-s.stopOnErr:
+		drainFunc()
+		return nil // Return nil so workers exit cleanly without propagating error
 	default:
 		return nil
 	}
@@ -404,7 +443,9 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 	go func() {
 		defer wg.Done()
 		for {
+			s.glock.Lock()
 			t := s.globalQueue.PopFront()
+			s.glock.Unlock()
 			if t == nil {
 				break
 			}
