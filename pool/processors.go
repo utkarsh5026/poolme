@@ -202,9 +202,14 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 		debugLog("runScheduler: failed to create strategy: %v", err)
 		return err
 	}
-	defer func() {
+
+	var shutdownOnce sync.Once
+	shutdown := func() {
 		debugLog("runScheduler: shutting down strategy")
 		s.Shutdown()
+	}
+	defer func() {
+		shutdownOnce.Do(shutdown)
 	}()
 
 	resChan := make(chan *Result[R, int64], len(tasks))
@@ -212,15 +217,39 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 		resChan <- result
 	}
 
-	debugLog("runScheduler: submitting batch of %d tasks", len(tasks))
-	submittedCount, err := s.SubmitBatch(tasks)
-	if err != nil {
-		debugLog("runScheduler: batch submit failed: %v", err)
-		return err
-	}
-	debugLog("runScheduler: successfully submitted %d tasks", submittedCount)
-
 	startWorkers(ctx, conf.WorkerCount, s, p, handler, resChan)
+
+	go func() {
+		<-ctx.Done()
+		debugLog("runScheduler: context cancelled, triggering strategy shutdown")
+		shutdownOnce.Do(shutdown)
+	}()
+
+	submitErrChan := make(chan error, 1)
+	submittedCountChan := make(chan int, 1)
+
+	go func() {
+		debugLog("runScheduler: submitting batch of %d tasks", len(tasks))
+		submittedCount, err := s.SubmitBatch(tasks)
+		if err != nil {
+			debugLog("runScheduler: batch submit failed: %v", err)
+			submitErrChan <- err
+			return
+		}
+		debugLog("runScheduler: successfully submitted %d tasks", submittedCount)
+		submittedCountChan <- submittedCount
+	}()
+
+	var submittedCount int
+	select {
+	case err := <-submitErrChan:
+		return err
+	case submittedCount = <-submittedCountChan:
+	case <-ctx.Done():
+		debugLog("runScheduler: context cancelled during task submission")
+		submittedCount = len(tasks) // Will collect as many as available
+	}
+
 	debugLog("runScheduler: collecting results")
 	return collect(submittedCount, resChan, onResult)
 }
