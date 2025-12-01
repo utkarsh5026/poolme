@@ -7,6 +7,9 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// signal is used to signal worker goroutines for wakeup or shutdown.
+type signal struct{}
+
 type SchedulingStrategyType int
 
 const (
