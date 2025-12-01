@@ -1,4 +1,4 @@
-package pool_test
+package pool
 
 import (
 	"context"
@@ -7,156 +7,172 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/utkarsh5026/poolme/pool"
 )
 
 // TestHooksBasic demonstrates basic hook usage
 func TestHooksBasic(t *testing.T) {
-	var mu sync.Mutex
-	events := []string{}
+	testFunc := func(t *testing.T, strategy strategyConfig) {
+		var mu sync.Mutex
+		events := []string{}
 
-	wp := pool.NewWorkerPool[int, string](
-		pool.WithWorkerCount(2),
-		pool.WithBeforeTaskStart(func(task int) {
-			mu.Lock()
-			events = append(events, fmt.Sprintf("start:%d", task))
-			mu.Unlock()
-		}),
-		pool.WithOnTaskEnd(func(task int, result string, err error) {
-			mu.Lock()
-			if err != nil {
-				events = append(events, fmt.Sprintf("end:%d:error", task))
-			} else {
-				events = append(events, fmt.Sprintf("end:%d:%s", task, result))
+		opts := append(strategy.opts,
+			WithBeforeTaskStart(func(task int) {
+				mu.Lock()
+				events = append(events, fmt.Sprintf("start:%d", task))
+				mu.Unlock()
+			}),
+			WithOnTaskEnd(func(task int, result string, err error) {
+				mu.Lock()
+				if err != nil {
+					events = append(events, fmt.Sprintf("end:%d:error", task))
+				} else {
+					events = append(events, fmt.Sprintf("end:%d:%s", task, result))
+				}
+				mu.Unlock()
+			}),
+		)
+
+		wp := NewWorkerPool[int, string](opts...)
+
+		tasks := []int{1, 2, 3}
+		results, err := wp.Process(context.Background(), tasks, func(ctx context.Context, task int) (string, error) {
+			time.Sleep(10 * time.Millisecond)
+			return fmt.Sprintf("result-%d", task), nil
+		})
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(results) != 3 {
+			t.Fatalf("expected 3 results, got %d", len(results))
+		}
+
+		// Verify all events were recorded
+		mu.Lock()
+		defer mu.Unlock()
+
+		if len(events) != 6 { // 3 starts + 3 ends
+			t.Errorf("expected 6 events, got %d: %v", len(events), events)
+		}
+
+		// Check that we have start and end for each task
+		for _, task := range tasks {
+			startFound := false
+			endFound := false
+			for _, event := range events {
+				if event == fmt.Sprintf("start:%d", task) {
+					startFound = true
+				}
+				if event == fmt.Sprintf("end:%d:result-%d", task, task) {
+					endFound = true
+				}
 			}
-			mu.Unlock()
-		}),
-	)
-
-	tasks := []int{1, 2, 3}
-	results, err := wp.Process(context.Background(), tasks, func(ctx context.Context, task int) (string, error) {
-		time.Sleep(10 * time.Millisecond)
-		return fmt.Sprintf("result-%d", task), nil
-	})
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(results) != 3 {
-		t.Fatalf("expected 3 results, got %d", len(results))
-	}
-
-	// Verify all events were recorded
-	mu.Lock()
-	defer mu.Unlock()
-
-	if len(events) != 6 { // 3 starts + 3 ends
-		t.Errorf("expected 6 events, got %d: %v", len(events), events)
-	}
-
-	// Check that we have start and end for each task
-	for _, task := range tasks {
-		startFound := false
-		endFound := false
-		for _, event := range events {
-			if event == fmt.Sprintf("start:%d", task) {
-				startFound = true
+			if !startFound {
+				t.Errorf("start event not found for task %d", task)
 			}
-			if event == fmt.Sprintf("end:%d:result-%d", task, task) {
-				endFound = true
+			if !endFound {
+				t.Errorf("end event not found for task %d", task)
 			}
 		}
-		if !startFound {
-			t.Errorf("start event not found for task %d", task)
-		}
-		if !endFound {
-			t.Errorf("end event not found for task %d", task)
-		}
 	}
+	runStrageyTest(t, testFunc, 2)
 }
 
 // TestHooksWithRetry demonstrates retry hook usage
 func TestHooksWithRetry(t *testing.T) {
-	var mu sync.Mutex
-	retries := make(map[int][]int) // task -> attempts
+	strategies := getAllStrategies(1)
 
-	wp := pool.NewWorkerPool[int, string](
-		pool.WithWorkerCount(1),
-		pool.WithRetryPolicy(3, 10*time.Millisecond),
-		pool.WithOnEachAttempt(func(task int, attempt int, err error) {
+	for _, strategy := range strategies {
+		t.Run(strategy.name, func(t *testing.T) {
+			var mu sync.Mutex
+			retries := make(map[int][]int) // task -> attempts
+
+			opts := append(strategy.opts,
+				WithRetryPolicy(3, 10*time.Millisecond),
+				WithOnEachAttempt(func(task int, attempt int, err error) {
+					mu.Lock()
+					retries[task] = append(retries[task], attempt)
+					mu.Unlock()
+				}),
+			)
+
+			wp := NewWorkerPool[int, string](opts...)
+
+			attemptCount := 0
+			tasks := []int{1}
+
+			_, err := wp.Process(context.Background(), tasks, func(ctx context.Context, task int) (string, error) {
+				attemptCount++
+				if attemptCount < 3 {
+					return "", errors.New("temporary error")
+				}
+				return "success", nil
+			})
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
 			mu.Lock()
-			retries[task] = append(retries[task], attempt)
-			mu.Unlock()
-		}),
-	)
+			defer mu.Unlock()
 
-	attemptCount := 0
-	tasks := []int{1}
+			// Should have 2 retry attempts (attempts 1 and 2 failed, 3 succeeded)
+			if len(retries[1]) != 2 {
+				t.Errorf("expected 2 retry callbacks, got %d: %v", len(retries[1]), retries[1])
+			}
 
-	_, err := wp.Process(context.Background(), tasks, func(ctx context.Context, task int) (string, error) {
-		attemptCount++
-		if attemptCount < 3 {
-			return "", errors.New("temporary error")
-		}
-		return "success", nil
-	})
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	// Should have 2 retry attempts (attempts 1 and 2 failed, 3 succeeded)
-	if len(retries[1]) != 2 {
-		t.Errorf("expected 2 retry callbacks, got %d: %v", len(retries[1]), retries[1])
-	}
-
-	// Verify attempt numbers
-	expectedAttempts := []int{1, 2}
-	for i, attempt := range retries[1] {
-		if attempt != expectedAttempts[i] {
-			t.Errorf("expected attempt %d, got %d", expectedAttempts[i], attempt)
-		}
+			// Verify attempt numbers
+			expectedAttempts := []int{1, 2}
+			for i, attempt := range retries[1] {
+				if attempt != expectedAttempts[i] {
+					t.Errorf("expected attempt %d, got %d", expectedAttempts[i], attempt)
+				}
+			}
+		})
 	}
 }
 
 // TestHooksWithError demonstrates hook behavior with errors
 func TestHooksWithError(t *testing.T) {
-	var mu sync.Mutex
-	var lastError error
+	strategies := getAllStrategies(2)
 
-	wp := pool.NewWorkerPool[int, string](
-		pool.WithWorkerCount(2),
-		pool.WithOnTaskEnd(func(task int, result string, err error) {
-			mu.Lock()
-			if err != nil {
-				lastError = err
+	for _, strategy := range strategies {
+		t.Run(strategy.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var lastError error
+
+			opts := append(strategy.opts,
+				WithOnTaskEnd(func(task int, result string, err error) {
+					mu.Lock()
+					if err != nil {
+						lastError = err
+					}
+					mu.Unlock()
+				}),
+			)
+
+			wp := NewWorkerPool[int, string](opts...)
+
+			tasks := []int{1, 2, 3}
+			_, err := wp.Process(context.Background(), tasks, func(ctx context.Context, task int) (string, error) {
+				if task == 2 {
+					return "", errors.New("task 2 failed")
+				}
+				return fmt.Sprintf("result-%d", task), nil
+			})
+
+			if err == nil {
+				t.Fatal("expected error but got nil")
 			}
-			mu.Unlock()
-		}),
-	)
 
-	tasks := []int{1, 2, 3}
-	_, err := wp.Process(context.Background(), tasks, func(ctx context.Context, task int) (string, error) {
-		if task == 2 {
-			return "", errors.New("task 2 failed")
-		}
-		return fmt.Sprintf("result-%d", task), nil
-	})
+			mu.Lock()
+			defer mu.Unlock()
 
-	if err == nil {
-		t.Fatal("expected error but got nil")
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if lastError == nil {
-		t.Error("expected lastError to be set by hook")
+			if lastError == nil {
+				t.Error("expected lastError to be set by hook")
+			}
+		})
 	}
 }
 
@@ -175,8 +191,8 @@ func TestHooksTypeSafety(t *testing.T) {
 		}()
 
 		// This should panic because we're using string hook with int pool
-		stringHook := pool.WithBeforeTaskStart(func(task string) {})
-		_ = pool.NewWorkerPool[int, string](stringHook)
+		stringHook := WithBeforeTaskStart(func(task string) {})
+		_ = NewWorkerPool[int, string](stringHook)
 	})
 
 	t.Run("onTaskEnd type mismatch", func(t *testing.T) {
@@ -192,8 +208,8 @@ func TestHooksTypeSafety(t *testing.T) {
 		}()
 
 		// This should panic because result type is wrong
-		wrongHook := pool.WithOnTaskEnd(func(task int, result int, err error) {})
-		_ = pool.NewWorkerPool[int, string](wrongHook)
+		wrongHook := WithOnTaskEnd(func(task int, result int, err error) {})
+		_ = NewWorkerPool[int, string](wrongHook)
 	})
 
 	t.Run("onRetry type mismatch", func(t *testing.T) {
@@ -209,62 +225,54 @@ func TestHooksTypeSafety(t *testing.T) {
 		}()
 
 		// This should panic because task type is wrong
-		wrongHook := pool.WithOnEachAttempt(func(task string, attempt int, err error) {})
-		_ = pool.NewWorkerPool[int, string](wrongHook)
+		wrongHook := WithOnEachAttempt(func(task string, attempt int, err error) {})
+		_ = NewWorkerPool[int, string](wrongHook)
 	})
 }
 
 // TestHooksWithProcessMap demonstrates hooks work with ProcessMap
 func TestHooksWithProcessMap(t *testing.T) {
-	var mu sync.Mutex
-	processedKeys := []string{}
+	strategies := getAllStrategies(2)
 
-	wp := pool.NewWorkerPool[string, int](
-		pool.WithWorkerCount(2),
-		pool.WithBeforeTaskStart(func(task string) {
+	for _, strategy := range strategies {
+		t.Run(strategy.name, func(t *testing.T) {
+			var mu sync.Mutex
+			processedKeys := []string{}
+
+			opts := append(strategy.opts,
+				WithBeforeTaskStart(func(task string) {
+					mu.Lock()
+					processedKeys = append(processedKeys, task)
+					mu.Unlock()
+				}),
+			)
+
+			wp := NewWorkerPool[string, int](opts...)
+
+			tasks := map[string]string{
+				"key1": "value1",
+				"key2": "value2",
+				"key3": "value3",
+			}
+
+			results, err := wp.ProcessMap(context.Background(), tasks, func(ctx context.Context, task string) (int, error) {
+				return len(task), nil
+			})
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(results) != 3 {
+				t.Fatalf("expected 3 results, got %d", len(results))
+			}
+
 			mu.Lock()
-			processedKeys = append(processedKeys, task)
-			mu.Unlock()
-		}),
-	)
+			defer mu.Unlock()
 
-	tasks := map[string]string{
-		"key1": "value1",
-		"key2": "value2",
-		"key3": "value3",
+			if len(processedKeys) != 3 {
+				t.Errorf("expected 3 processed keys, got %d", len(processedKeys))
+			}
+		})
 	}
-
-	results, err := wp.ProcessMap(context.Background(), tasks, func(ctx context.Context, task string) (int, error) {
-		return len(task), nil
-	})
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(results) != 3 {
-		t.Fatalf("expected 3 results, got %d", len(results))
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if len(processedKeys) != 3 {
-		t.Errorf("expected 3 processed keys, got %d", len(processedKeys))
-	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) &&
-		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
-			containsMiddle(s, substr)))
-}
-
-func containsMiddle(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

@@ -1,5 +1,7 @@
 package pool
 
+import "testing"
+
 // strategyConfig defines a test configuration for a scheduling strategy
 type strategyConfig struct {
 	name string
@@ -57,4 +59,14 @@ func getAllStrategiesWithOpts(workerCount int, additionalOpts ...WorkerPoolOptio
 		baseStrategies[i].opts = append(baseStrategies[i].opts, additionalOpts...)
 	}
 	return baseStrategies
+}
+
+func runStrageyTest(t *testing.T, testFunc func(t *testing.T, s strategyConfig), workerCount int, additonalOpts ...WorkerPoolOption) {
+	strategies := getAllStrategiesWithOpts(workerCount, additonalOpts...)
+
+	for _, stragety := range strategies {
+		t.Run(stragety.name, func(t *testing.T) {
+			testFunc(t, stragety)
+		})
+	}
 }
