@@ -247,9 +247,11 @@ func TestPriorityQueueStrategy_New(t *testing.T) {
 
 	if strategy == nil {
 		t.Fatal("expected non-nil strategy")
+		return
 	}
 	if strategy.pq == nil {
-		t.Error("expected non-nil priority queue")
+		t.Fatal("expected non-nil priority queue")
+		return
 	}
 	if strategy.pq.Len() != 0 {
 		t.Errorf("expected empty queue, got length %d", strategy.pq.Len())
