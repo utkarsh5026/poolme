@@ -23,6 +23,7 @@ type channelStrategy[T any, R any] struct {
 	quit         chan signal                       // Channel to signal task submissions to stop.
 	affinityFunc func(t T) string
 	submitWg     sync.WaitGroup // WaitGroup to track in-flight submissions
+	submitMu     sync.Mutex     // Mutex to protect submission during shutdown
 }
 
 // newChannelStrategy creates a new instance of channelStrategy.
@@ -47,12 +48,15 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 // Submit submits a single task to the next worker channel using round-robin scheduling.
 // Returns nil since this operation cannot fail synchronously.
 func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
+	s.submitMu.Lock()
 	select {
 	case <-s.quit:
+		s.submitMu.Unlock()
 		return context.Canceled
 	default:
 	}
 	s.submitWg.Add(1)
+	s.submitMu.Unlock()
 
 	defer s.submitWg.Done()
 
@@ -66,12 +70,15 @@ func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 // Returns the number of tasks successfully submitted and an error if shutdown was signaled during submission.
 // If shutdown occurs mid-batch, returns the count of tasks submitted before shutdown and context.Canceled error.
 func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
+	s.submitMu.Lock()
 	select {
 	case <-s.quit:
+		s.submitMu.Unlock()
 		return 0, context.Canceled
 	default:
 	}
 	s.submitWg.Add(1)
+	s.submitMu.Unlock()
 
 	defer s.submitWg.Done()
 
@@ -155,7 +162,10 @@ func (s *channelStrategy[T, R]) submitRoundRobin(idx int, task *types.SubmittedT
 // - Waits for all in-flight submissions to complete.
 // - Closes all worker task channels, signaling workers to exit.
 func (s *channelStrategy[T, R]) Shutdown() {
-	close(s.quit)     // Signal ongoing submissions to stop
+	s.submitMu.Lock()
+	close(s.quit) // Signal ongoing submissions to stop
+	s.submitMu.Unlock()
+
 	s.submitWg.Wait() // Wait for all in-flight submissions to complete
 
 	for _, ch := range s.taskChans {

@@ -75,6 +75,7 @@ type priorityQueueStrategy[T any, R any] struct {
 	conf          *ProcessorConfig[T, R]
 	mu            sync.Mutex
 	availableChan chan struct{}
+	closed        bool
 }
 
 // newPriorityQueueStrategy creates a new priority queue-based scheduling strategy.
@@ -93,10 +94,17 @@ func newPriorityQueueStrategy[T any, R any](conf *ProcessorConfig[T, R], tasks [
 // The task is inserted into the heap based on its priority value.
 func (s *priorityQueueStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	s.mu.Lock()
-	heap.Push(s.pq, task)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
-	s.availableChan <- struct{}{}
+	if s.closed {
+		return context.Canceled
+	}
+	heap.Push(s.pq, task)
+
+	select {
+	case s.availableChan <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
@@ -104,10 +112,13 @@ func (s *priorityQueueStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) er
 // Builds the heap in O(n) time rather than O(n log n) for individual inserts.
 func (s *priorityQueueStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
 	s.mu.Lock()
-	s.pq.queue = append(s.pq.queue, tasks...)
+	defer s.mu.Unlock()
 
+	if s.closed {
+		return 0, context.Canceled
+	}
+	s.pq.queue = append(s.pq.queue, tasks...)
 	heap.Init(s.pq)
-	s.mu.Unlock()
 
 	for range tasks {
 		select {
@@ -162,7 +173,12 @@ func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64
 // exit will not be processed. Consider implementing drain logic if task completion
 // guarantees are required.
 func (s *priorityQueueStrategy[T, R]) Shutdown() {
-	close(s.availableChan)
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		close(s.availableChan)
+	}
+	s.mu.Unlock()
 }
 
 // drain processes all remaining tasks in the priority queue during shutdown.
