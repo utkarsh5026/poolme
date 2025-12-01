@@ -171,13 +171,6 @@ func (w *wsDeque[T, R]) PopBack() *types.SubmittedTask[T, R] {
 //
 // FIFO ordering for steals minimizes contention with the owner who pops from the back,
 // as they access opposite ends of the queue.
-//
-// Returns:
-//   - The task from the front of the deque, or nil if the deque is empty or the steal failed
-//
-// Concurrency:
-//   - Uses CAS to atomically claim a task, ensuring only one stealer succeeds
-//   - Multiple failed CAS attempts indicate high contention
 func (w *wsDeque[T, R]) PopFront() *types.SubmittedTask[T, R] {
 	head := w.head.Load()
 	tail := w.tail.Load()
@@ -198,12 +191,6 @@ func (w *wsDeque[T, R]) PopFront() *types.SubmittedTask[T, R] {
 
 // Len returns the approximate number of tasks in the deque.
 // The result may be stale immediately after the call returns due to concurrent operations.
-//
-// Returns:
-//   - The number of tasks currently in the deque (may be approximate due to races)
-//
-// Note: This is primarily useful for monitoring and debugging, not for making
-// critical synchronization decisions.
 func (w *wsDeque[T, R]) Len() int {
 	head := w.head.Load()
 	tail := w.tail.Load()
@@ -227,6 +214,7 @@ type workSteal[T any, R any] struct {
 	nextWorker, stealSeed     atomic.Uint64 // Round-robin counter for task distribution
 	workerCount, maxLocalSize int
 	quit                      chan struct{}
+	wakeup                    chan struct{} // Buffered channel to wake sleeping workers
 }
 
 func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConfig[T, R]) *workSteal[T, R] {
@@ -235,6 +223,7 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConf
 		globalQueue:  newWSDeque[T, R](maxLocalSize),
 		maxLocalSize: maxLocalSize,
 		quit:         make(chan struct{}),
+		wakeup:       make(chan struct{}, n), // Buffered to wake multiple workers without blocking
 		workerQueues: make([]*wsDeque[T, R], n),
 		workerCount:  n,
 		conf:         conf,
@@ -261,35 +250,47 @@ func (s *workSteal[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 		s.globalQueue.PushBack(task)
 	}
 
+	select {
+	case s.wakeup <- struct{}{}:
+	default:
+	}
+
 	return nil
 }
 
 // SubmitBatch pre-distributes tasks across worker queues for optimal load balancing.
 // This eliminates per-task submission overhead and gives workers balanced starting queues.
 func (s *workSteal[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
-	if len(tasks) == 0 {
+	n := len(tasks)
+	if n == 0 {
 		return 0, nil
 	}
 
-	tasksPerWorker := len(tasks) / s.workerCount
-	remainder := len(tasks) % s.workerCount
+	tasksPerWorker := n / s.workerCount
+	remainder := n % s.workerCount
 
 	taskIndex := 0
 
-	// Distribute tasks evenly across worker queues
-	for workerID := 0; workerID < s.workerCount && taskIndex < len(tasks); workerID++ {
-		localQueue := s.workerQueues[workerID]
+	for i := 0; i < s.workerCount && taskIndex < n; i++ {
+		localQueue := s.workerQueues[i]
 
-		// Give this worker its share of tasks (plus one extra if there's remainder)
-		tasksForThisWorker := tasksPerWorker
-		if workerID < remainder {
-			tasksForThisWorker++
+		tcount := tasksPerWorker
+		if i < remainder {
+			tcount++
 		}
 
-		// Add tasks to this worker's local queue
-		for i := 0; i < tasksForThisWorker && taskIndex < len(tasks); i++ {
+		for j := 0; j < tcount && taskIndex < n; j++ {
 			localQueue.PushBack(tasks[taskIndex])
 			taskIndex++
+		}
+	}
+
+	// Wake up workers (one per worker that received tasks, non-blocking)
+	workersToWake := min(s.workerCount, (taskIndex+tasksPerWorker)/max(tasksPerWorker, 1))
+	for range workersToWake {
+		select {
+		case s.wakeup <- struct{}{}:
+		default:
 		}
 	}
 
@@ -306,6 +307,13 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 		s.drain(ctx, localQueue, executor, h)
 	}
 
+	executeTask := func(t *types.SubmittedTask[T, R]) error {
+		if err := handleWithCare(ctx, t, s.conf, executor, h, drain); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	for {
 		if globalCounter%10 == 0 {
 			if err := s.checkQuit(ctx, drain); err != nil {
@@ -316,7 +324,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 
 		for range fastCheckCounter {
 			if t := localQueue.PopBack(); t != nil {
-				if err := handleWithCare(ctx, t, s.conf, executor, h, drain); err != nil {
+				if err := executeTask(t); err != nil {
 					return err
 				}
 				missCount = 0
@@ -325,7 +333,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 
 		if s.globalQueue.Len() > 0 {
 			if t := s.globalQueue.PopFront(); t != nil {
-				if err := handleWithCare(ctx, t, s.conf, executor, h, drain); err != nil {
+				if err := executeTask(t); err != nil {
 					return err
 				}
 				missCount = 0
@@ -335,7 +343,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 		}
 
 		if t := s.steal(int(workerID)); t != nil {
-			if err := handleWithCare(ctx, t, s.conf, executor, h, drain); err != nil {
+			if err := executeTask(t); err != nil {
 				return err
 			}
 			missCount = 0
@@ -343,7 +351,16 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 		}
 
 		missCount++
-		s.backoff(missCount)
+
+		// Check for wakeup signal before sleeping
+		select {
+		case <-s.wakeup:
+			// New work available, reset miss count and continue
+			missCount = 0
+			continue
+		default:
+			s.backoff(missCount)
+		}
 	}
 }
 
@@ -399,30 +416,27 @@ func (s *workSteal[T, R]) steal(thiefID int) *types.SubmittedTask[T, R] {
 		}
 
 		victimQueue := s.workerQueues[victimID]
+		n := victimQueue.Len()
+		if n > batchStealSize*2 {
+			stealCount := min(n/2, batchStealSize)
 
-		// Batch steal: take multiple tasks at once to reduce overhead
-		// Only do this if victim has enough tasks (don't steal from small queues)
-		victimLen := victimQueue.Len()
-		if victimLen > batchStealSize*2 {
-			stealCount := min(victimLen/2, batchStealSize)
-
-			// Steal first task to return, rest go to local queue
 			firstTask := victimQueue.PopFront()
 			if firstTask == nil {
 				continue
 			}
 
-			// Steal additional tasks to local queue
-			for j := 1; j < stealCount; j++ {
-				if task := victimQueue.PopFront(); task != nil {
-					thiefQueue.PushBack(task)
+			for range stealCount - 1 {
+				if t := victimQueue.PopFront(); t != nil {
+					thiefQueue.PushBack(t)
 				}
 			}
 
 			return firstTask
-		} else if victimLen > 0 {
-			if task := victimQueue.PopFront(); task != nil {
-				return task
+		}
+
+		if n > 0 {
+			if t := victimQueue.PopFront(); t != nil {
+				return t
 			}
 		}
 	}
@@ -432,11 +446,6 @@ func (s *workSteal[T, R]) steal(thiefID int) *types.SubmittedTask[T, R] {
 
 // backoff implements an adaptive exponential backoff strategy for idle workers.
 // This prevents busy-waiting while maintaining responsiveness.
-//
-// Backoff progression (optimized for responsiveness):
-//   - missCount 1-20: Active spinning (check frequently for new work)
-//   - missCount 21-30: Yield to scheduler (let other goroutines run)
-//   - missCount 31+: Exponential sleep (conserve CPU when truly idle)
 func (s *workSteal[T, R]) backoff(missCount int) {
 	switch {
 	case missCount <= 20:
@@ -451,8 +460,6 @@ func (s *workSteal[T, R]) backoff(missCount int) {
 		runtime.Gosched()
 
 	default:
-		// Exponential backoff for truly idle workers
-		// Start with 50µs and double up to 5ms max (more responsive than before)
 		sleepTime := 50 * time.Microsecond
 		iterations := missCount - 30
 		for i := 0; i < iterations && sleepTime < 5*time.Millisecond; i++ {
@@ -461,7 +468,16 @@ func (s *workSteal[T, R]) backoff(missCount int) {
 		if sleepTime > 5*time.Millisecond {
 			sleepTime = 5 * time.Millisecond
 		}
-		time.Sleep(sleepTime)
+
+		// Use select to make sleep interruptible by wakeup or quit signal
+		select {
+		case <-s.wakeup:
+			// Woken up by new work arriving
+		case <-s.quit:
+			// Shutting down
+		case <-time.After(sleepTime):
+			// Normal timeout
+		}
 	}
 }
 
@@ -475,22 +491,22 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 	go func() {
 		defer wg.Done()
 		for {
-			task := localQueue.PopBack()
-			if task == nil {
+			t := localQueue.PopBack()
+			if t == nil {
 				break
 			}
-			_ = executeSubmitted(ctx, task, s.conf, executor, h)
+			_ = executeSubmitted(ctx, t, s.conf, executor, h)
 		}
 	}()
 
 	go func() {
 		defer wg.Done()
 		for {
-			task := s.globalQueue.PopFront()
-			if task == nil {
+			t := s.globalQueue.PopFront()
+			if t == nil {
 				break
 			}
-			_ = executeSubmitted(ctx, task, s.conf, executor, h)
+			_ = executeSubmitted(ctx, t, s.conf, executor, h)
 		}
 	}()
 
@@ -499,4 +515,5 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 
 func (s *workSteal[T, R]) Shutdown() {
 	close(s.quit)
+	close(s.wakeup)
 }
