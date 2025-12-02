@@ -148,17 +148,11 @@ func (s *priorityQueueStrategy[T, R]) Worker(ctx context.Context, workerID int64
 			}
 
 			for {
-				s.mu.Lock()
-				if s.pq.Len() == 0 {
-					s.mu.Unlock()
+				t := s.dequeueTask()
+				if t == nil {
 					break
 				}
-				task, ok := heap.Pop(s.pq).(*types.SubmittedTask[T, R])
-				s.mu.Unlock()
-				if !ok {
-					panic("priorityQueueStrategy.Worker: invalid type assertion")
-				}
-				if err := handleWithCare(ctx, task, s.conf, executor, h, drainFunc); err != nil {
+				if err := handleWithCare(ctx, t, s.conf, executor, h, drainFunc); err != nil {
 					return err
 				}
 			}
@@ -185,17 +179,28 @@ func (s *priorityQueueStrategy[T, R]) Shutdown() {
 // This ensures that no tasks are left unprocessed when the strategy is shut down.
 func (s *priorityQueueStrategy[T, R]) drain(ctx context.Context, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) {
 	for {
-		s.mu.Lock()
-		if s.pq.Len() == 0 {
-			s.mu.Unlock()
+		t := s.dequeueTask()
+		if t == nil {
 			return
 		}
-
-		task, ok := heap.Pop(s.pq).(*types.SubmittedTask[T, R])
-		s.mu.Unlock()
-		if !ok {
-			panic("priorityQueueStrategy.drain: invalid type assertion")
-		}
-		_ = executeSubmitted(ctx, task, s.conf, executor, h)
+		_ = executeSubmitted(ctx, t, s.conf, executor, h)
 	}
+}
+
+// dequeueTask removes and returns the highest priority task from the queue.
+// Returns nil if the queue is empty.
+func (s *priorityQueueStrategy[T, R]) dequeueTask() *types.SubmittedTask[T, R] {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.pq.Len() == 0 {
+		return nil
+	}
+
+	task, ok := heap.Pop(s.pq).(*types.SubmittedTask[T, R])
+	if !ok {
+		panic("priorityQueueStrategy.dequeueTask: invalid type assertion")
+	}
+
+	return task
 }
