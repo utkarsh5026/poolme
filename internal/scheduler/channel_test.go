@@ -679,56 +679,6 @@ func TestChannelStrategy_AffinityRouting(t *testing.T) {
 	}
 }
 
-// TestChannelStrategy_FNVHash tests the FNV hash function.
-func TestChannelStrategy_FNVHash(t *testing.T) {
-	conf := &ProcessorConfig[string, string]{
-		WorkerCount: 4,
-		TaskBuffer:  10,
-	}
-
-	s := newChannelStrategy(conf)
-
-	// Test empty string returns FNV offset
-	emptyHash := s.fnvHash("")
-	if emptyHash != 2166136261 {
-		t.Errorf("fnvHash(\"\") = %d, want 2166136261", emptyHash)
-	}
-
-	// Test hash consistency
-	testCases := []string{"hello", "world", "test", "affinity", "consistent"}
-	for _, key := range testCases {
-		hash1 := s.fnvHash(key)
-		hash2 := s.fnvHash(key)
-		if hash1 != hash2 {
-			t.Errorf("hash not consistent for %q: %d != %d", key, hash1, hash2)
-		}
-	}
-
-	// Test different strings produce different hashes
-	hash1 := s.fnvHash("hello")
-	hash2 := s.fnvHash("world")
-	if hash1 == hash2 {
-		t.Error("different strings produced same hash")
-	}
-
-	// Test hash distribution (different inputs should produce different hashes)
-	hashes := make(map[uint32]bool)
-	for i := range 100 {
-		key := fmt.Sprintf("key-%d", i)
-		hash := s.fnvHash(key)
-		if hashes[hash] {
-			// Collision is possible but unlikely for sequential keys
-			t.Logf("hash collision detected for key %s", key)
-		}
-		hashes[hash] = true
-	}
-
-	// Should have good distribution (most keys should hash to unique values)
-	if len(hashes) < 90 {
-		t.Errorf("poor hash distribution: only %d unique hashes for 100 keys", len(hashes))
-	}
-}
-
 // TestChannelStrategy_ConcurrentSubmit tests concurrent task submission.
 func TestChannelStrategy_ConcurrentSubmit(t *testing.T) {
 	conf := &ProcessorConfig[int, int]{

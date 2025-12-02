@@ -10,6 +10,10 @@ import (
 
 const (
 	retryForSameChannel = 4
+
+	// FNV-1a hash parameters
+	offset32 = 2166136261
+	prime32  = 16777619
 )
 
 // channelStrategy provides a simple scheduling strategy that distributes tasks
@@ -17,13 +21,13 @@ const (
 //
 // Each worker goroutine reads from its own channel to execute submitted tasks.
 type channelStrategy[T any, R any] struct {
-	config       *ProcessorConfig[T, R]            // Processor configuration parameters.
-	taskChans    []chan *types.SubmittedTask[T, R] // Per-worker task channels.
-	counter      atomic.Int64                      // Atomic counter for round-robin channel selection.
-	quit         chan signal                       // Channel to signal task submissions to stop.
-	affinityFunc func(t T) string
-	submitWg     sync.WaitGroup // WaitGroup to track in-flight submissions
-	submitMu     sync.Mutex     // Mutex to protect submission during shutdown
+	config    *ProcessorConfig[T, R]            // Processor configuration parameters.
+	taskChans []chan *types.SubmittedTask[T, R] // Per-worker task channels.
+	counter   atomic.Int64                      // Atomic counter for round-robin channel selection.
+	quit      chan signal                       // Channel to signal task submissions to stop.
+	affRouter *affinityRouter[T, R]             // Affinity router for consistent task routing.
+	submitWg  sync.WaitGroup                    // WaitGroup to track in-flight submissions
+	submitMu  sync.Mutex                        // Mutex to protect submission during shutdown
 }
 
 // newChannelStrategy creates a new instance of channelStrategy.
@@ -32,10 +36,16 @@ type channelStrategy[T any, R any] struct {
 func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrategy[T, R] {
 	n := max(1, conf.WorkerCount)
 	c := &channelStrategy[T, R]{
-		config:       conf,
-		taskChans:    make([]chan *types.SubmittedTask[T, R], n),
-		quit:         make(chan signal),
-		affinityFunc: conf.AffinityFunc,
+		config:    conf,
+		taskChans: make([]chan *types.SubmittedTask[T, R], n),
+		quit:      make(chan signal),
+	}
+
+	if conf.AffinityFunc != nil {
+		c.affRouter = &affinityRouter[T, R]{
+			affinityFunc: conf.AffinityFunc,
+			workerCount:  n,
+		}
 	}
 
 	for i := range n {
@@ -229,12 +239,16 @@ func (s *channelStrategy[T, R]) drain(
 func (s *channelStrategy[T, R]) next(t *types.SubmittedTask[T, R]) int64 {
 	// #nosec G115 -- len(s.taskChans) is bounded by max(NumCPU, WorkerCount), always << math.MaxUint32
 	n := uint32(len(s.taskChans))
-	if s.affinityFunc != nil {
-		key := s.affinityFunc(t.Task)
-		hash := s.fnvHash(key)
-		return int64(hash % n)
+	if s.affRouter != nil {
+		return s.affRouter.Route(t.Task)
 	}
 	return s.counter.Add(1) % int64(n)
+}
+
+// affinityRouter routes tasks to workers based on an affinity key.
+type affinityRouter[T any, R any] struct {
+	affinityFunc func(t T) string
+	workerCount  int
 }
 
 // fnvHash computes the FNV-1a hash for the given string key.
@@ -244,16 +258,19 @@ func (s *channelStrategy[T, R]) next(t *types.SubmittedTask[T, R]) int64 {
 // affinity keys uniformly across internal task channels.
 //
 // https://en.wikipedia.org/wiki/Fowler–Noll–Vo_hash_function
-func (s *channelStrategy[T, R]) fnvHash(key string) uint32 {
-	const (
-		offset32 = 2166136261
-		prime32  = 16777619
-	)
-
+func (a *affinityRouter[T, R]) fnvHash(key string) uint32 {
 	hash := uint32(offset32)
 	for i := 0; i < len(key); i++ {
 		hash ^= uint32(key[i])
 		hash *= prime32
 	}
 	return hash
+}
+
+// Route computes the worker index for the given task based on its affinity key.
+// It uses FNV-1a hashing to consistently map tasks with the same affinity key
+func (a *affinityRouter[T, R]) Route(t T) int64 {
+	key := a.affinityFunc(t)
+	hash := a.fnvHash(key)
+	return int64(hash % uint32(a.workerCount))
 }
