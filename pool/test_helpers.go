@@ -58,6 +58,13 @@ func getAllStrategies(workerCount int) []strategyConfig {
 				WithSchedulingStrategy(SchedulingBitmask),
 			},
 		},
+		{
+			name: "Lmax",
+			opts: []WorkerPoolOption{
+				WithWorkerCount(workerCount),
+				WithLmax(),
+			},
+		},
 	}
 }
 
