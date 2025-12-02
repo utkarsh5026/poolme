@@ -20,6 +20,31 @@ func submitTasks[T any, R any](d *lmaxStrategy[T, R], start, count int, t *testi
 	}
 }
 
+func submitTasksWithIDs[T any, R any](d *lmaxStrategy[T, R], n int, t *testing.T, idFunc func(int) int64) {
+	for id := range n {
+		debugLog("Submitting task %d", id)
+		task := types.NewSubmittedTask[T, R](any(id).(T), idFunc(id), nil)
+		if err := d.Submit(task); err != nil {
+			t.Fatalf("failed to submit task %d: %v", id, err)
+		}
+	}
+}
+
+func startWorkers(ctx context.Context, conf *ProcessorConfig[int, int], d *lmaxStrategy[int, int], executor types.ProcessFunc[int, int], resultHandler types.ResultHandler[int, int]) {
+	for i := 0; i < conf.WorkerCount; i++ {
+		go func(workerID int) {
+			_ = d.Worker(ctx, int64(workerID), executor, resultHandler)
+		}(i)
+	}
+}
+
+func verifyFinalCount(receivedCount int, expected int, t *testing.T) {
+	// Verify
+	if receivedCount != expected {
+		t.Errorf("expected %d tasks processed, got %d", expected, receivedCount)
+	}
+}
+
 // TestDisruptorBasicSubmitConsume tests basic submit and consume flow
 func TestDisruptorBasicSubmitConsume(t *testing.T) {
 	conf := &ProcessorConfig[int, int]{
@@ -54,13 +79,7 @@ func TestDisruptorBasicSubmitConsume(t *testing.T) {
 
 	wg.Add(taskCount)
 
-	// Start workers
-	go func() {
-		_ = d.Worker(ctx, 0, executor, resultHandler)
-	}()
-	go func() {
-		_ = d.Worker(ctx, 1, executor, resultHandler)
-	}()
+	startWorkers(ctx, conf, d, executor, resultHandler)
 
 	wg.Wait()
 
@@ -102,11 +121,7 @@ func TestDisruptorConcurrentProducers(t *testing.T) {
 	}
 
 	// Start workers FIRST (important!)
-	for i := 0; i < conf.WorkerCount; i++ {
-		go func(workerID int) {
-			_ = d.Worker(ctx, int64(workerID), executor, resultHandler)
-		}(i)
-	}
+	startWorkers(ctx, conf, d, executor, resultHandler)
 
 	// Give workers a moment to start
 	time.Sleep(10 * time.Millisecond)
@@ -115,17 +130,12 @@ func TestDisruptorConcurrentProducers(t *testing.T) {
 	var submitWg sync.WaitGroup
 	submitWg.Add(producerCount)
 
-	for p := 0; p < producerCount; p++ {
+	for p := range producerCount {
 		go func(producerID int) {
 			defer submitWg.Done()
-			for i := 0; i < tasksPerProducer; i++ {
-				taskVal := producerID*tasksPerProducer + i
-				task := types.NewSubmittedTask[int, int](taskVal, int64(taskVal), nil)
-				if err := d.Submit(task); err != nil {
-					t.Errorf("producer %d: failed to submit task: %v", producerID, err)
-					return
-				}
-			}
+			submitTasksWithIDs(d, tasksPerProducer, t, func(i int) int64 {
+				return int64(producerID*tasksPerProducer + i)
+			})
 		}(p)
 	}
 
@@ -155,12 +165,7 @@ func TestDisruptorConcurrentConsumers(t *testing.T) {
 
 	// Submit tasks
 	taskCount := 500
-	for i := 0; i < taskCount; i++ {
-		task := types.NewSubmittedTask[int, int](i, int64(i), nil)
-		if err := d.Submit(task); err != nil {
-			t.Fatalf("failed to submit task %d: %v", i, err)
-		}
-	}
+	submitTasks(d, 0, taskCount, t)
 
 	// Consume with multiple workers
 	var receivedCount atomic.Int32
@@ -190,17 +195,11 @@ func TestDisruptorConcurrentConsumers(t *testing.T) {
 			_ = d.Worker(ctx, int64(workerID), executor, resultHandler)
 		}(i)
 	}
-
+	startWorkers(ctx, conf, d, executor, resultHandler)
 	wg.Wait()
 
-	// Verify all tasks were received exactly once
-	if int(receivedCount.Load()) != taskCount {
-		t.Errorf("expected %d tasks, got %d", taskCount, receivedCount.Load())
-	}
-
-	if len(received) != taskCount {
-		t.Errorf("expected %d unique tasks, got %d", taskCount, len(received))
-	}
+	verifyFinalCount(int(receivedCount.Load()), taskCount, t)
+	verifyFinalCount(len(received), taskCount, t)
 }
 
 // TestDisruptorConcurrentProducerConsumer tests simultaneous production and consumption
@@ -235,27 +234,17 @@ func TestDisruptorConcurrentProducerConsumer(t *testing.T) {
 		return val, nil
 	}
 
-	// Start workers first
-	for i := 0; i < conf.WorkerCount; i++ {
-		go func(workerID int) {
-			_ = d.Worker(ctx, int64(workerID), executor, resultHandler)
-		}(i)
-	}
+	startWorkers(ctx, conf, d, executor, resultHandler)
 
 	// Start producers
 	var submitWg sync.WaitGroup
 	submitWg.Add(producerCount)
-	for p := 0; p < producerCount; p++ {
+	for p := range producerCount {
 		go func(producerID int) {
 			defer submitWg.Done()
-			for i := 0; i < tasksPerProducer; i++ {
-				taskVal := producerID*tasksPerProducer + i
-				task := types.NewSubmittedTask[int, int](taskVal, int64(taskVal), nil)
-				if err := d.Submit(task); err != nil {
-					t.Errorf("producer %d: failed to submit task: %v", producerID, err)
-					return
-				}
-			}
+			submitTasksWithIDs(d, tasksPerProducer, t, func(i int) int64 {
+				return int64(producerID*tasksPerProducer + i)
+			})
 		}(p)
 	}
 
@@ -265,10 +254,7 @@ func TestDisruptorConcurrentProducerConsumer(t *testing.T) {
 	// Wait for all tasks to be processed
 	wg.Wait()
 
-	// Verify
-	if int(receivedCount.Load()) != totalTasks {
-		t.Errorf("expected %d tasks processed, got %d", totalTasks, receivedCount.Load())
-	}
+	verifyFinalCount(int(receivedCount.Load()), totalTasks, t)
 }
 
 // TestDisruptorBufferFull tests behavior when ring buffer is full
@@ -288,13 +274,7 @@ func TestDisruptorBufferFull(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Fill the buffer
-	for i := 0; i < capacity; i++ {
-		task := types.NewSubmittedTask[int, int](i, int64(i), nil)
-		if err := d.Submit(task); err != nil {
-			t.Fatalf("failed to submit task %d: %v", i, err)
-		}
-	}
+	submitTasks(d, 0, capacity, t)
 
 	// Start a consumer after a delay
 	var wg sync.WaitGroup
@@ -311,19 +291,10 @@ func TestDisruptorBufferFull(t *testing.T) {
 
 	// Start consumers with a slight delay
 	time.Sleep(50 * time.Millisecond)
-	for i := 0; i < conf.WorkerCount; i++ {
-		go func(workerID int) {
-			_ = d.Worker(ctx, int64(workerID), executor, resultHandler)
-		}(i)
-	}
 
+	startWorkers(ctx, conf, d, executor, resultHandler)
 	// Try to submit more tasks - should block until consumers free up space
-	for i := capacity; i < capacity+5; i++ {
-		task := types.NewSubmittedTask[int, int](i, int64(i), nil)
-		if err := d.Submit(task); err != nil {
-			t.Fatalf("failed to submit task %d after buffer full: %v", i, err)
-		}
-	}
+	submitTasks(d, capacity, capacity+5, t)
 
 	wg.Wait()
 }
@@ -340,16 +311,11 @@ func TestDisruptorShutdown(t *testing.T) {
 	defer cancel()
 
 	taskCount := 20
-	for i := range taskCount {
-		task := types.NewSubmittedTask[int, int](i, int64(i), nil)
-		if err := d.Submit(task); err != nil {
-			t.Fatalf("failed to submit task %d: %v", i, err)
-		}
-	}
+	submitTasks(d, 0, taskCount, t)
 
 	var receivedCount atomic.Int32
-	var wg sync.WaitGroup
-	wg.Add(2) // For 2 workers to exit
+	var workerWg sync.WaitGroup
+	workerWg.Add(2) // For 2 workers to exit
 
 	resultHandler := func(task *types.SubmittedTask[int, int], result *types.Result[int, int64]) {
 		receivedCount.Add(1)
@@ -360,10 +326,10 @@ func TestDisruptorShutdown(t *testing.T) {
 		return val, nil
 	}
 
-	// Start workers
+	// Start workers with proper exit signaling
 	for i := 0; i < conf.WorkerCount; i++ {
 		go func(workerID int) {
-			defer wg.Done()
+			defer workerWg.Done()
 			_ = d.Worker(ctx, int64(workerID), executor, resultHandler)
 		}(i)
 	}
@@ -375,7 +341,7 @@ func TestDisruptorShutdown(t *testing.T) {
 	d.Shutdown()
 
 	// Wait for workers to exit
-	wg.Wait()
+	workerWg.Wait()
 
 	// Verify that all tasks were processed (drain should handle remaining)
 	if int(receivedCount.Load()) != taskCount {
@@ -384,7 +350,7 @@ func TestDisruptorShutdown(t *testing.T) {
 
 	// Try to submit after shutdown - should fail
 	task := types.NewSubmittedTask[int, int](999, 999, nil)
-	if err := d.Submit(task); err != ErrQueueClosed {
+	if err := d.Submit(task); err != ErrSchedulerClosed {
 		t.Errorf("expected ErrQueueClosed after shutdown, got %v", err)
 	}
 }
@@ -395,7 +361,7 @@ func TestDisruptorSubmitBatch(t *testing.T) {
 		WorkerCount: 4,
 		TaskBuffer:  50,
 	}
-	d := newLmaxStrategy[int, int](conf, 256)
+	d := newLmaxStrategy(conf, 256)
 	defer d.Shutdown()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -404,7 +370,7 @@ func TestDisruptorSubmitBatch(t *testing.T) {
 	// Create batch of tasks
 	batchSize := 100
 	tasks := make([]*types.SubmittedTask[int, int], batchSize)
-	for i := 0; i < batchSize; i++ {
+	for i := range batchSize {
 		tasks[i] = types.NewSubmittedTask[int, int](i, int64(i), nil)
 	}
 
@@ -413,9 +379,7 @@ func TestDisruptorSubmitBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitBatch failed: %v", err)
 	}
-	if submitted != batchSize {
-		t.Errorf("expected %d tasks submitted, got %d", batchSize, submitted)
-	}
+	verifyFinalCount(submitted, batchSize, t)
 
 	// Consume tasks
 	var receivedCount atomic.Int32
@@ -431,33 +395,22 @@ func TestDisruptorSubmitBatch(t *testing.T) {
 		return val, nil
 	}
 
-	// Start workers
-	for i := 0; i < conf.WorkerCount; i++ {
-		go func(workerID int) {
-			_ = d.Worker(ctx, int64(workerID), executor, resultHandler)
-		}(i)
-	}
+	startWorkers(ctx, conf, d, executor, resultHandler)
 
 	wg.Wait()
-
-	// Verify
-	if int(receivedCount.Load()) != batchSize {
-		t.Errorf("expected %d tasks processed, got %d", batchSize, receivedCount.Load())
-	}
+	verifyFinalCount(int(receivedCount.Load()), int(batchSize), t)
 }
 
 // TestDisruptorSequenceWraparound tests that sequences wrap correctly
-// SKIPPED: v1 implementation requires buffer size >= task count
-// TODO: Fix wrap-around logic in v2
 func TestDisruptorSequenceWraparound(t *testing.T) {
-	t.Skip("Skipping wrap-around test - known limitation in v1")
+	// t.Skip("Skipping wrap-around test - known limitation in v1")
 	conf := &ProcessorConfig[int, int]{
 		WorkerCount: 2,
 		TaskBuffer:  10,
 	}
 	// Small buffer to force wrapping quickly
 	capacity := 4
-	d := newLmaxStrategy[int, int](conf, capacity)
+	d := newLmaxStrategy(conf, capacity)
 	defer d.Shutdown()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -478,20 +431,7 @@ func TestDisruptorSequenceWraparound(t *testing.T) {
 		return val, nil
 	}
 
-	// Start workers
-	for i := 0; i < conf.WorkerCount; i++ {
-		go func(workerID int) {
-			_ = d.Worker(ctx, int64(workerID), executor, resultHandler)
-		}(i)
-	}
-
-	// Submit tasks
-	for i := 0; i < taskCount; i++ {
-		task := types.NewSubmittedTask[int, int](i, int64(i), nil)
-		if err := d.Submit(task); err != nil {
-			t.Fatalf("failed to submit task %d: %v", i, err)
-		}
-	}
-
+	startWorkers(ctx, conf, d, executor, resultHandler)
+	submitTasks(d, 0, taskCount, t)
 	wg.Wait()
 }
