@@ -67,8 +67,8 @@ func TestNewChannelStrategy(t *testing.T) {
 				}
 			}
 
-			if s.quit == nil {
-				t.Error("quit channel is nil")
+			if s.quitter == nil {
+				t.Error("quitter is nil")
 			}
 		})
 	}
@@ -534,7 +534,7 @@ func TestChannelStrategy_Shutdown(t *testing.T) {
 
 	// Verify quit channel is closed
 	select {
-	case <-s.quit:
+	case <-s.quitter.Closed():
 		// Good - quit channel is closed
 	default:
 		t.Error("quit channel was not closed")
