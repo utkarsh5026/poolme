@@ -71,7 +71,7 @@ type lmaxStrategy[T any, R any] struct {
 	conf     *ProcessorConfig[T, R]
 	capacity int
 
-	quitter *quitter
+	quit *workerSignal
 }
 
 // newDisruptorStrategy creates a new Disruptor scheduling strategy.
@@ -105,7 +105,7 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 		workerSeqs: workerSeqs,
 		conf:       conf,
 		capacity:   capacity,
-		quitter:    newQuitter(),
+		quit:       newWorkerSignal(),
 	}
 
 	// Set to max uint64 (equivalent to -1)
@@ -117,8 +117,8 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 }
 
 func (l *lmaxStrategy[T, R]) Submit(t *types.SubmittedTask[T, R]) error {
-	if l.quitter.IsClosed() {
-		return context.Canceled
+	if l.quit.IsClosed() {
+		return ErrSchedulerClosed
 	}
 
 	var nextSeq uint64
@@ -144,11 +144,33 @@ func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
 	wrapSlot := nextSeq - uint64(l.capacity) // x - capacity
 	spinns := 0
 	for {
-		if l.quitter.IsClosed() {
+		if l.quit.IsClosed() {
 			return context.Canceled
 		}
 
-		if wrapSlot <= l.gatingSeq.get() {
+		gating := l.gatingSeq.get()
+		// Special case for initial state: if no consumer has started (gatingSeq == initialSequence),
+		// only allow submitting the first `capacity` tasks to prevent wrapping before consumers start
+		if gating == initialSequence {
+			if nextSeq < uint64(l.capacity) {
+				return nil
+			}
+			// Block if trying to wrap around before any consumer has processed tasks
+			spinns++
+			if spinns > maxConsumerWaitSpins {
+				spinns = 0
+				runtime.Gosched()
+			}
+			continue
+		}
+
+		// If we're still in the first lap (nextSeq < capacity), always allow
+		// since wrapSlot would wrap to a huge number in unsigned arithmetic
+		if nextSeq < uint64(l.capacity) {
+			return nil
+		}
+
+		if wrapSlot <= gating {
 			return nil
 		}
 		spinns++
@@ -171,7 +193,7 @@ func (l *lmaxStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (in
 }
 
 func (l *lmaxStrategy[T, R]) Shutdown() {
-	l.quitter.Close()
+	l.quit.Close()
 }
 
 func (l *lmaxStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
@@ -179,15 +201,78 @@ func (l *lmaxStrategy[T, R]) Worker(ctx context.Context, workerID int64, executo
 	for {
 		select {
 		case <-ctx.Done():
+			l.drain(ctx, workerID, executor, h, true)
 			return ctx.Err()
 
-		case <-l.quitter.Closed():
+		case <-l.quit.Wait():
+			l.drain(ctx, workerID, executor, h, false)
 			return nil
 
 		default:
 			if err := l.consume(ctx, workerID, executor, h); err != nil {
+				l.quit.Close()
 				return err
 			}
+		}
+	}
+}
+
+func (l *lmaxStrategy[T, R]) drain(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R], processAll bool) {
+	// Keep processing tasks until we've caught up with the producer
+	// If processAll is false (shutdown scenario), only process immediately available tasks
+	for {
+		producer := l.tail.get()
+		consmer := l.consumerSeq.get()
+
+		// No more tasks to drain
+		if (consmer == initialSequence && producer == initialSequence) ||
+			(consmer != initialSequence && consmer >= producer) {
+			debugLog("drain complete: consmer=%d, producer=%d", consmer, producer)
+			return
+		}
+
+		// Try to claim a batch
+		nextSeq := consmer + 1
+		potentialEnd := min(nextSeq+uint64(lmxConsumerBatchSize)-1, producer)
+
+		if !l.consumerSeq.cas(consmer, potentialEnd) {
+			runtime.Gosched()
+			continue
+		}
+
+		// Process claimed tasks
+		for seq := nextSeq; seq <= potentialEnd; seq++ {
+			slot := l.getSlot(seq)
+			// Check if task is already published
+			if atomic.LoadUint64(&slot.sequence) != seq {
+				// Task not published yet
+				if processAll {
+					// Context cancelled - skip unpublished tasks
+					debugLog("drain skipping unpublished task: seq=%d", seq)
+					l.workerSeqs[workerID].set(seq)
+					continue
+				} else {
+					// Shutdown - don't wait for unpublished tasks, exit early
+					debugLog("drain exiting early due to unpublished task: seq=%d", seq)
+					l.workerSeqs[workerID].set(seq - 1) // Set to last completed
+					l.updateGatingSequence()
+					return
+				}
+			}
+
+			task := slot.task
+			if task != nil {
+				_ = handleWithCare(ctx, task, l.conf, executor, h, nil)
+				debugLog("drain processed task: seq=%d", seq)
+			}
+			l.workerSeqs[workerID].set(seq)
+		}
+
+		l.updateGatingSequence()
+
+		// If not processing all tasks (shutdown), exit after one batch
+		if !processAll {
+			return
 		}
 	}
 }
@@ -196,7 +281,9 @@ func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, execut
 	producer := l.tail.get()
 	consmer := l.consumerSeq.get()
 
-	if consmer >= producer {
+	if (consmer == initialSequence && producer == initialSequence) ||
+		(consmer != initialSequence && consmer >= producer) {
+		debugLog("consumer is greedy: consmer=%d, producer=%d", consmer, producer)
 		runtime.Gosched()
 		return nil
 	}
@@ -210,15 +297,16 @@ func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, execut
 	}
 
 	for seq := nextSeq; seq <= potentialEnd; seq++ {
-		if err := l.waitForProducer(seq); err != nil {
+		if err := l.waitForProducer(ctx, seq); err != nil {
 			return err
 		}
 
 		task := l.ring[seq&l.mask].task
 		if err := handleWithCare(ctx, task, l.conf, executor, h, nil); err != nil {
+			debugLog("task executed with error: seq=%d, err=%v", seq, err)
 			return err
 		}
-
+		debugLog("task executed successfully: seq=%d", seq)
 		l.workerSeqs[workerID].set(seq)
 	}
 
@@ -226,17 +314,28 @@ func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, execut
 	return nil
 }
 
-func (l *lmaxStrategy[T, R]) waitForProducer(seq uint64) error {
+func (l *lmaxStrategy[T, R]) waitForProducer(ctx context.Context, seq uint64) error {
 	slot := l.getSlot(seq)
 	spins := 0
 
 	for {
-		if l.quitter.IsClosed() {
+		// Check if task is already available first
+		if atomic.LoadUint64(&slot.sequence) == seq {
+			return nil
+		}
+
+		// If shutting down and task is not ready yet, don't wait for it
+		// This prevents workers from waiting indefinitely for tasks that may never arrive
+		if l.quit.IsClosed() {
 			return ErrSchedulerClosed
 		}
 
-		if atomic.LoadUint64(&slot.sequence) == seq {
-			return nil
+		// Only check context cancellation if we need to wait
+		// This allows processing already-published tasks even if context is cancelled
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
 		spins++
@@ -252,14 +351,39 @@ func (l *lmaxStrategy[T, R]) updateGatingSequence() {
 		return
 	}
 
-	minSeq := l.workerSeqs[0].get()
-	for i := 1; i < len(l.workerSeqs); i++ {
-		minSeq = min(minSeq, l.workerSeqs[i].get())
+	// Find minimum sequence among workers that have claimed sequences
+	// Skip workers still at initialSequence to avoid blocking progress
+	minSeq := uint64(0)
+	initialized := false
+
+	for i := 0; i < len(l.workerSeqs); i++ {
+		seq := l.workerSeqs[i].get()
+		if seq == initialSequence {
+			continue // Skip workers that haven't claimed any sequences yet
+		}
+		if !initialized {
+			minSeq = seq
+			initialized = true
+		} else {
+			minSeq = min(minSeq, seq)
+		}
+	}
+
+	// If no worker has claimed anything yet, keep gating at initialSequence
+	if !initialized {
+		return
 	}
 
 	for {
 		old := l.gatingSeq.get()
-		if minSeq <= old || l.gatingSeq.cas(old, minSeq) {
+		// Special case: if gatingSeq is at initial state, always try to update it.
+		// Otherwise, only update if minSeq has advanced beyond old.
+		if old == initialSequence || minSeq > old {
+			if l.gatingSeq.cas(old, minSeq) {
+				break
+			}
+		} else {
+			// minSeq <= old and old != initialSequence, gating is already ahead
 			break
 		}
 	}
