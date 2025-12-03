@@ -150,6 +150,432 @@ func main() {
 
 <br/>
 
+## 🎯 Scheduling Strategies
+
+<div align="center">
+
+<p>
+PoolMe implements <strong>7 distinct scheduling strategies</strong> plus a <strong>Task Fusion wrapper</strong>,<br/>
+each optimized for specific use cases and workload characteristics.
+</p>
+
+</div>
+
+### 📋 Strategy Overview
+
+<div align="center">
+
+|       Strategy        |       Best For        |   Ordering   | Contention | Max Workers |   Latency   |
+| :-------------------: | :-------------------: | :----------: | :--------: | :---------: | :---------: |
+|    📌 **Channel**     |    General purpose    |     FIFO     |    Low     |      ∞      |     Low     |
+| 🔄 **Work-Stealing**  |     CPU-intensive     | LIFO (local) |  Very Low  |      ∞      |     Low     |
+|      ⚡ **MPMC**      |    Many submitters    |     FIFO     |  Minimal   |      ∞      |     Low     |
+| 🏆 **Priority Queue** |    Priority tasks     |   Priority   |  Moderate  |      ∞      |  Moderate   |
+|   📊 **Skip List**    |  Concurrent priority  |   Priority   |    Low     |      ∞      |     Low     |
+|    🎛️ **Bitmask**     | Low-latency dispatch  |    Direct    |  Minimal   |     64      |  Ultra-low  |
+|      🚀 **LMAX**      | Ultra-high throughput |   Sequence   |    None    |      ∞      | Predictable |
+
+</div>
+
+---
+
+<details>
+<summary><h3>📌 Channel Strategy <code>(Default)</code></h3></summary>
+
+<br/>
+
+<table>
+<tr>
+<td width="60%">
+
+#### How It Works
+
+The default strategy using Go channels with round-robin distribution.
+
+- Creates one **buffered channel per worker**
+- Uses **round-robin distribution** with an atomic counter
+- Attempts non-blocking sends with fallback to alternative channels
+- Supports **task affinity** via FNV-1a hashing for consistent routing
+
+</td>
+<td width="40%">
+
+#### Best Use Cases
+
+✅ General-purpose workloads<br/>
+✅ Uniform task complexity<br/>
+✅ Simple, predictable scheduling<br/>
+✅ CPU-bound with consistent time
+
+</td>
+</tr>
+</table>
+
+```go
+// Default - no explicit configuration needed
+p := pool.NewWorkerPool[int, string](pool.WithWorkerCount(8))
+
+// With task affinity for consistent routing
+p := pool.NewWorkerPool[Job, string](
+    pool.WithWorkerCount(8),
+    pool.WithAffinity(func(task Job) string {
+        return fmt.Sprintf("user-%d", task.UserID)
+    }),
+)
+```
+
+</details>
+
+---
+
+<details>
+<summary><h3>🔄 Work-Stealing Strategy</h3></summary>
+
+<br/>
+
+<table>
+<tr>
+<td width="60%">
+
+#### How It Works
+
+Based on the **Chase-Lev work-stealing deque algorithm** for optimal load balancing.
+
+- Each worker has a **local lock-free deque** (double-ended queue)
+- Workers process local queue in **LIFO** order (better cache locality)
+- Idle workers **steal** from other workers' queues in **FIFO** order
+- **Automatic load balancing** across workers
+
+</td>
+<td width="40%">
+
+#### Best Use Cases
+
+✅ CPU-intensive variable tasks<br/>
+✅ Recursive/divide-and-conquer<br/>
+✅ Tasks spawning subtasks<br/>
+✅ Unpredictable task duration
+
+</td>
+</tr>
+</table>
+
+```go
+p := pool.NewWorkerPool[Task, float64](
+    pool.WithWorkerCount(runtime.NumCPU()),
+    pool.WithWorkStealing(),
+)
+
+// Process CPU-intensive tasks with variable complexity
+results, err := p.Process(ctx, tasks, func(ctx context.Context, task Task) (float64, error) {
+    return computeIntensiveWork(task), nil
+})
+```
+
+</details>
+
+---
+
+<details>
+<summary><h3>⚡ MPMC Queue Strategy</h3></summary>
+
+<br/>
+
+<table>
+<tr>
+<td width="60%">
+
+#### How It Works
+
+**Multi-Producer Multi-Consumer** lock-free ring buffer using atomic CAS operations.
+
+- Multiple producers can **enqueue concurrently**
+- Multiple consumers (workers) can **dequeue concurrently**
+- Supports both **bounded** and **unbounded** modes
+- Uses **sequence numbers** for slot synchronization
+
+</td>
+<td width="40%">
+
+#### Best Use Cases
+
+✅ High-throughput scenarios<br/>
+✅ Many concurrent submitters<br/>
+✅ Predictable low-latency<br/>
+✅ Bursty task patterns
+
+</td>
+</tr>
+</table>
+
+```go
+// Unbounded queue (default)
+p := pool.NewWorkerPool[Task, Result](
+    pool.WithWorkerCount(8),
+    pool.WithMPMCQueue(pool.WithUnboundedQueue()),
+)
+
+// Bounded queue with backpressure
+p := pool.NewWorkerPool[Task, Result](
+    pool.WithWorkerCount(8),
+    pool.WithMPMCQueue(pool.WithBoundedQueue(10000)),
+)
+```
+
+</details>
+
+---
+
+<details>
+<summary><h3>🏆 Priority Queue Strategy</h3></summary>
+
+<br/>
+
+<table>
+<tr>
+<td width="60%">
+
+#### How It Works
+
+**Heap-based priority queue** for tasks with varying importance levels.
+
+- Uses Go's `container/heap` for a **min-heap** priority queue
+- Tasks ordered by **user-defined comparison function**
+- Workers process **highest-priority tasks first**
+- Thread-safe with mutex protection
+
+</td>
+<td width="40%">
+
+#### Best Use Cases
+
+✅ Varying priority levels<br/>
+✅ SLA-driven workloads<br/>
+✅ Deadline-based scheduling<br/>
+✅ Quality-of-service needs
+
+</td>
+</tr>
+</table>
+
+```go
+type Job struct {
+    ID       int
+    Priority int  // 1=Urgent, 5=Low
+    Name     string
+}
+
+p := pool.NewWorkerPool[Job, string](
+    pool.WithWorkerCount(4),
+    pool.WithPriorityQueue(func(a, b Job) bool {
+        return a.Priority < b.Priority  // Lower value = higher priority
+    }),
+)
+```
+
+</details>
+
+---
+
+<details>
+<summary><h3>📊 Skip List Strategy</h3></summary>
+
+<br/>
+
+<table>
+<tr>
+<td width="60%">
+
+#### How It Works
+
+**Probabilistic data structure** with O(log n) operations and excellent concurrency.
+
+- Multiple levels of linked lists as **"express lanes"**
+- **Better concurrency** than heap (lock-free reads)
+- Same-priority tasks grouped together (**FIFO within priority**)
+- Scales well with concurrent access
+
+</td>
+<td width="40%">
+
+#### Best Use Cases
+
+✅ High-throughput priority tasks<br/>
+✅ Many concurrent submitters<br/>
+✅ Uniform priority distribution<br/>
+✅ Better than heap concurrency
+
+</td>
+</tr>
+</table>
+
+```go
+type Task struct {
+    Deadline time.Time
+}
+
+p := pool.NewWorkerPool[Task, string](
+    pool.WithWorkerCount(8),
+    pool.WithSkipList(func(a, b Task) bool {
+        return a.Deadline.Before(b.Deadline)  // Earlier deadline = higher priority
+    }),
+)
+```
+
+</details>
+
+---
+
+<details>
+<summary><h3>🎛️ Bitmask Strategy</h3></summary>
+
+<br/>
+
+<table>
+<tr>
+<td width="60%">
+
+#### How It Works
+
+Uses a **64-bit atomic bitmask** for ultra-low latency worker dispatch.
+
+- 64-bit atomic bitmask tracks **worker idle/busy state**
+- Each bit: `1 = idle`, `0 = busy`
+- Direct worker assignment using `TrailingZeros64`
+- Falls back to **global queue** when all workers are busy
+
+</td>
+<td width="40%">
+
+#### Best Use Cases
+
+✅ Ultra-low latency dispatch<br/>
+✅ Moderate workers (≤64)<br/>
+✅ Direct worker assignment<br/>
+✅ Predictable overhead
+
+</td>
+</tr>
+</table>
+
+```go
+p := pool.NewWorkerPool[Task, Result](
+    pool.WithWorkerCount(32),  // Max 64 workers
+    pool.WithBitmask(),
+)
+```
+
+> ⚠️ **Note:** Limited to maximum 64 workers due to bitmask size.
+
+</details>
+
+---
+
+<details>
+<summary><h3>🚀 LMAX Disruptor Strategy</h3></summary>
+
+<br/>
+
+<table>
+<tr>
+<td width="60%">
+
+#### How It Works
+
+Inspired by the **LMAX Disruptor pattern** used in high-frequency trading systems.
+
+- **Pre-allocated ring buffer** (power-of-2 size)
+- **Sequence-based coordination** (no locks)
+- **Cache-line padding** to prevent false sharing
+- **Minimal GC pressure** from pre-allocation
+
+</td>
+<td width="40%">
+
+#### Best Use Cases
+
+✅ Ultra-high throughput (M/sec)<br/>
+✅ Latency-sensitive apps<br/>
+✅ Financial trading systems<br/>
+✅ Minimal GC requirements
+
+</td>
+</tr>
+</table>
+
+```go
+p := pool.NewWorkerPool[Event, Result](
+    pool.WithWorkerCount(8),
+    pool.WithLmax(),
+)
+```
+
+</details>
+
+---
+
+<details>
+<summary><h3>🔗 Task Fusion <code>(Wrapper)</code></h3></summary>
+
+<br/>
+
+<table>
+<tr>
+<td width="60%">
+
+#### How It Works
+
+**Wraps any underlying strategy** to batch tasks for reduced overhead.
+
+- Batches tasks within a **configurable time window**
+- Flushes when **batch size reached** or **timer expires**
+- Reduces **per-task submission overhead**
+- Compatible with **all other strategies**
+
+</td>
+<td width="40%">
+
+#### Best Use Cases
+
+✅ High-volume small tasks<br/>
+✅ I/O-bound batching<br/>
+✅ Acceptable small delays<br/>
+✅ Overhead reduction
+
+</td>
+</tr>
+</table>
+
+```go
+p := pool.NewWorkerPool[Task, Result](
+    pool.WithWorkerCount(8),
+    pool.WithWorkStealing(),  // Any underlying strategy
+    pool.WithTaskFusion(100*time.Millisecond, 50),  // 100ms window, 50 max batch
+)
+```
+
+</details>
+
+---
+
+### 🧭 Strategy Selection Guide
+
+<div align="center">
+
+| 💼 Scenario                            | 🎯 Recommended Strategy                   |
+| :------------------------------------- | :---------------------------------------- |
+| General-purpose workloads              | 📌 **Channel** (default)                  |
+| CPU-intensive with variable complexity | 🔄 **Work-Stealing**                      |
+| Many concurrent task submitters        | ⚡ **MPMC**                               |
+| Tasks with priority levels             | 🏆 **Priority Queue** or 📊 **Skip List** |
+| Low-latency dispatch (≤64 workers)     | 🎛️ **Bitmask**                            |
+| Ultra-high throughput systems          | 🚀 **LMAX**                               |
+| High-volume small tasks                | 🔗 Any strategy + **Task Fusion**         |
+
+</div>
+
+<br/>
+
 ## 📖 Usage
 
 ### Processing Modes
@@ -579,6 +1005,56 @@ go test -bench=BenchmarkComprehensive_Scenario -benchmem ./benchmarks/
 ```
 
 **Note:** The comprehensive benchmarks are located in the [benchmarks](./benchmarks) directory as a separate package for better organization and modularity.
+
+<br/>
+
+## 📊 Benchmark Visualization
+
+PoolMe includes a powerful benchmark visualization tool that runs all strategy comparison benchmarks and presents the results in an interactive dark-themed dashboard.
+
+### Features
+
+- **One-Command Execution**: Run benchmarks and start visualization server with Docker
+- **Interactive Charts**: Apache ECharts with zoom, pan, and filtering capabilities
+- **Strategy Comparisons**: Compare Channel, WorkStealing, MPMC, and PriorityQueue strategies
+- **Historical Analysis**: Track performance trends over time
+- **Dark Theme UI**: Beautiful Tailwind CSS dark mode interface
+
+### Quick Start
+
+```bash
+# Using Docker
+docker build -t poolme-benchviz -f tools/benchviz/Dockerfile .
+docker run -p 8080:8080 -v $(pwd)/benchmark-data:/data poolme-benchviz
+
+# Using Docker Compose
+cd tools/benchviz
+docker-compose up --build
+
+# Access the dashboard
+open http://localhost:8080
+```
+
+### Dashboard Views
+
+**Main Dashboard:**
+
+- Summary cards with key metrics
+- Category tabs for filtering (CPUBound, IOBound, Mixed, etc.)
+- Execution time comparison chart (grouped bar chart)
+- Throughput chart (tasks/sec)
+- Memory usage chart (bytes/op and allocs/op)
+- Latency percentiles box plot
+- Sortable detailed results table
+
+**Comparison View:**
+
+- Select and compare two benchmark runs
+- Performance delta visualization
+- Regression and improvement tables
+- Historical trend analysis
+
+For detailed documentation, see [tools/benchviz/README.md](./tools/benchviz/README.md).
 
 <br/>
 
