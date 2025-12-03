@@ -3,6 +3,7 @@ package scheduler
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/utkarsh5026/poolme/internal/types"
@@ -173,6 +174,10 @@ func (s *priorityQueueStrategy[T, R]) runInLoop(ctx context.Context, executor ty
 			break
 		}
 		if err := handleWithCare(ctx, t, s.conf, executor, h, drainFunc); err != nil && !ignoreErr {
+			// Signal all workers to stop if this is a non-context error and continueOnErr is false
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !s.conf.ContinueOnErr {
+				s.Shutdown()
+			}
 			return err
 		}
 	}

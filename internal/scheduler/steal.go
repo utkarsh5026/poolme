@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -256,6 +257,9 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 
 	executeTask := func(t *types.SubmittedTask[T, R]) error {
 		if err := handleWithCare(ctx, t, s.conf, executor, h, drain); err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !s.conf.ContinueOnErr {
+				s.Shutdown()
+			}
 			return err
 		}
 		return nil

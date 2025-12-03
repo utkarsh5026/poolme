@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"sync"
 	"sync/atomic"
 
 	"github.com/utkarsh5026/poolme/internal/types"
@@ -268,9 +269,10 @@ func (q *mpmcQueue[T]) Close() {
 // This strategy is optimized for high-throughput scenarios where many goroutines
 // submit tasks concurrently to the pool.
 type mpmc[T any, R any] struct {
-	queue *mpmcQueue[*types.SubmittedTask[T, R]]
-	conf  *ProcessorConfig[T, R]
-	quit  chan struct{}
+	queue        *mpmcQueue[*types.SubmittedTask[T, R]]
+	conf         *ProcessorConfig[T, R]
+	quit         chan struct{}
+	shutdownOnce sync.Once
 }
 
 // newMPMCStrategy creates a new MPMC queue strategy with the given configuration
@@ -330,6 +332,10 @@ func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor types.
 		}
 
 		if err := handleWithCare(ctx, task, s.conf, executor, h, drainFunc); err != nil {
+			// Signal all workers to stop if this is a non-context error and continueOnErr is false
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !s.conf.ContinueOnErr {
+				s.Shutdown()
+			}
 			return err
 		}
 	}
@@ -348,6 +354,8 @@ func (s *mpmc[T, R]) drainQueue(ctx context.Context, executor types.ProcessFunc[
 
 // Shutdown gracefully stops the workers and closes the queue
 func (s *mpmc[T, R]) Shutdown() {
-	s.queue.Close()
-	close(s.quit)
+	s.shutdownOnce.Do(func() {
+		s.queue.Close()
+		close(s.quit)
+	})
 }

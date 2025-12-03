@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"math/bits"
 	"math/rand/v2"
 	"sync"
@@ -396,6 +397,9 @@ func (s *slStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor 
 					break
 				}
 				if err := handleWithCare(ctx, task, s.conf, executor, h, drainFunc); err != nil {
+					if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !s.conf.ContinueOnErr {
+						s.Shutdown()
+					}
 					return err
 				}
 			}
