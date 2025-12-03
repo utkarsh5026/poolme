@@ -27,9 +27,21 @@ jobs:
           go-version: "1.24"
           cache: true
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
       - name: Run benchmarks on current branch
         run: |
+          mkdir -p benchmark_results
           go test -bench=. -benchmem -run=^$ ./... | tee current_bench.txt
+          cp current_bench.txt benchmark_results/benchmark_output.txt
 
       - name: Checkout base branch
         if: github.event_name == 'pull_request'
@@ -70,11 +82,147 @@ jobs:
               body: '```\n' + comparison + '\n```'
             });
 
-      - name: Upload benchmark results
+      - name: Generate visualizations
+        run: |
+          cd scripts
+          python visualize_benchmarks.py ../benchmark_results/benchmark_output.txt --output-dir ../benchmark_results
+
+      - name: Create GitHub Actions Summary
+        if: always()
+        run: |
+          echo "# 📊 Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Add summary statistics
+          if [ -f "benchmark_results/BENCHMARK_REPORT.md" ]; then
+            cat benchmark_results/BENCHMARK_REPORT.md >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📈 Visualizations" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download the workflow artifacts to view interactive HTML dashboards and detailed charts." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Generated Files:" >> $GITHUB_STEP_SUMMARY
+          echo "- 🎨 \`dashboard.html\` - Interactive dashboard" >> $GITHUB_STEP_SUMMARY
+          echo "- 🗺️ \`performance_heatmap.html\` - Strategy comparison heatmap" >> $GITHUB_STEP_SUMMARY
+          echo "- 📊 PNG charts for each benchmark type" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload benchmark results and visualizations
         uses: actions/upload-artifact@v5
         with:
-          name: benchmark-results
+          name: benchmark-results-${{ github.sha }}
           path: |
             current_bench.txt
             base_bench.txt
+            benchmark_results/
           retention-days: 30
+
+      - name: Upload visualizations to temporary branch (for PR viewing)
+        if: github.event_name == 'pull_request'
+        run: |
+          # Create a temporary branch for this PR's visualizations
+          BRANCH_NAME="benchmark-viz-pr-${{ github.event.pull_request.number }}"
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # Create orphan branch (no history)
+          git checkout --orphan $BRANCH_NAME
+          git rm -rf . || true
+
+          # Copy only visualization files
+          cp -r benchmark_results/* . || true
+
+          # Add and commit
+          git add *.png *.html *.md 2>/dev/null || true
+          git commit -m "Benchmark visualizations for PR #${{ github.event.pull_request.number }}" || true
+
+          # Force push to branch
+          git push -f origin $BRANCH_NAME || true
+
+      - name: Comment PR with visualizations
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const branchName = `benchmark-viz-pr-${{ github.event.pull_request.number }}`;
+            const repoUrl = `https://github.com/${{ github.repository }}`;
+            const rawUrl = `https://raw.githubusercontent.com/${{ github.repository }}/${branchName}`;
+
+            // Read benchmark report if it exists
+            let body = '## 📊 Benchmark Results with Visualizations\n\n';
+
+            if (fs.existsSync('benchmark_results/BENCHMARK_REPORT.md')) {
+              const report = fs.readFileSync('benchmark_results/BENCHMARK_REPORT.md', 'utf8');
+
+              // Extract just the summary section (first few lines)
+              const lines = report.split('\n').slice(0, 20);
+              body += lines.join('\n') + '\n\n';
+              body += '<details>\n<summary>📄 View Full Report</summary>\n\n';
+              body += report + '\n';
+              body += '</details>\n\n';
+            }
+
+            body += `### 📈 View Visualizations Directly\n\n`;
+            body += `🔗 **[View All Visualizations on Branch](${repoUrl}/tree/${branchName})**\n\n`;
+            body += `#### Quick Links:\n`;
+            body += `- 🎨 [Interactive Dashboard](${repoUrl}/blob/${branchName}/dashboard.html) - Download and open in browser\n`;
+            body += `- 🗺️ [Performance Heatmap](${repoUrl}/blob/${branchName}/performance_heatmap.html) - Download and open in browser\n`;
+            body += `- 📊 [PNG Charts](${repoUrl}/tree/${branchName}) - View inline\n\n`;
+
+            // Try to embed a few key PNG images
+            body += `### 📊 Key Performance Charts\n\n`;
+
+            // List common benchmark images
+            const images = [
+              'Strategy_CPUBound_AllStrategies_performance.png',
+              'workload_comparison.png'
+            ];
+
+            for (const img of images) {
+              if (fs.existsSync(`benchmark_results/${img}`)) {
+                const imgName = img.replace(/_/g, ' ').replace('.png', '');
+                body += `<details>\n<summary>📈 ${imgName}</summary>\n\n`;
+                body += `![${imgName}](${rawUrl}/${img})\n\n`;
+                body += `</details>\n\n`;
+              }
+            }
+
+            body += `\n---\n`;
+            body += `💾 **Download Full Package:** Check the [workflow artifacts](${repoUrl}/actions/runs/${{ github.run_id }}) for \`benchmark-results-${{ github.sha }}\`\n`;
+            body += `\n*Visualizations branch will be automatically cleaned up when PR is closed.*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Commit visualizations to docs (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # Create docs/benchmarks directory
+          mkdir -p docs/benchmarks
+
+          # Copy visualizations
+          cp benchmark_results/*.png docs/benchmarks/ 2>/dev/null || true
+          cp benchmark_results/*.html docs/benchmarks/ 2>/dev/null || true
+          cp benchmark_results/BENCHMARK_REPORT.md docs/benchmarks/ 2>/dev/null || true
+
+          # Check for changes
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git add docs/benchmarks/
+          git commit -m "chore: update benchmark visualizations [skip ci]" || exit 0
+          git push
