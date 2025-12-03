@@ -24,7 +24,7 @@ type channelStrategy[T any, R any] struct {
 	config    *ProcessorConfig[T, R]            // Processor configuration parameters.
 	taskChans []chan *types.SubmittedTask[T, R] // Per-worker task channels.
 	counter   atomic.Int64                      // Atomic counter for round-robin channel selection.
-	quitter   *quitter                          // Quitter to signal shutdown.
+	quitter   *workerSignal                     // Quitter to signal shutdown.
 	affRouter *affinityRouter[T, R]             // Affinity router for consistent task routing.
 	submitWg  sync.WaitGroup                    // WaitGroup to track in-flight submissions
 	submitMu  sync.Mutex                        // Mutex to protect submission during shutdown
@@ -38,7 +38,7 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 	c := &channelStrategy[T, R]{
 		config:    conf,
 		taskChans: make([]chan *types.SubmittedTask[T, R], n),
-		quitter:   newQuitter(),
+		quitter:   newWorkerSignal(),
 	}
 
 	if conf.AffinityFunc != nil {
@@ -60,7 +60,7 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	s.submitMu.Lock()
 	select {
-	case <-s.quitter.Closed():
+	case <-s.quitter.Wait():
 		s.submitMu.Unlock()
 		return context.Canceled
 	default:
@@ -82,7 +82,7 @@ func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
 	s.submitMu.Lock()
 	select {
-	case <-s.quitter.Closed():
+	case <-s.quitter.Wait():
 		s.submitMu.Unlock()
 		return 0, context.Canceled
 	default:
@@ -125,7 +125,7 @@ func (s *channelStrategy[T, R]) tryToSubmit(idx int64, task *types.SubmittedTask
 	if !sent {
 		select {
 		case s.taskChans[idx] <- task:
-		case <-s.quitter.Closed():
+		case <-s.quitter.Wait():
 			return true
 		}
 	}
@@ -140,7 +140,7 @@ func (s *channelStrategy[T, R]) sendToChannel(idx int64, task *types.SubmittedTa
 		select {
 		case s.taskChans[idx] <- task:
 			return true, false
-		case <-s.quitter.Closed():
+		case <-s.quitter.Wait():
 			return true, true
 		default:
 		}
@@ -158,7 +158,7 @@ func (s *channelStrategy[T, R]) submitRoundRobin(idx int, task *types.SubmittedT
 		select {
 		case s.taskChans[altIdx] <- task:
 			return true
-		case <-s.quitter.Closed():
+		case <-s.quitter.Wait():
 			return true
 		default:
 			continue
@@ -195,7 +195,7 @@ func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 		case <-ctx.Done():
 			drain()
 			return ctx.Err()
-		case <-s.quitter.Closed():
+		case <-s.quitter.Wait():
 			drain()
 			return nil
 		case t, ok := <-s.taskChans[workerID]:

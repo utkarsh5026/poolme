@@ -534,7 +534,7 @@ func TestChannelStrategy_Shutdown(t *testing.T) {
 
 	// Verify quit channel is closed
 	select {
-	case <-s.quitter.Closed():
+	case <-s.quitter.Wait():
 		// Good - quit channel is closed
 	default:
 		t.Error("quit channel was not closed")
