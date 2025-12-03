@@ -28,6 +28,10 @@ type Scheduler[T, R any] struct {
 // NewScheduler creates a new Scheduler instance with the specified configuration options.
 // This does NOT start any workers immediately; use Start to begin processing tasks.
 //
+// For Scheduler, the default behavior is to continue processing tasks even if some fail
+// (continueOnError=true), since it's a long-running pool. You can override this with
+// WithContinueOnError(false) if needed.
+//
 // Parameters:
 //   - opts: Variadic set of WorkerPoolOption for customizing worker count, task buffer, etc.
 //
@@ -40,6 +44,8 @@ type Scheduler[T, R any] struct {
 //	_ = sched.Start(ctx, processFunc)
 //	future := sched.Submit(5)
 func NewScheduler[T, R any](opts ...WorkerPoolOption) *Scheduler[T, R] {
+	// For Scheduler, default to continueOnError=true since it's a long-running pool
+	opts = append([]WorkerPoolOption{WithContinueOnError(true)}, opts...)
 	cfg := createConfig[T, R](opts...)
 	return &Scheduler[T, R]{
 		config: cfg,

@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/utkarsh5026/poolme/internal/scheduler"
@@ -51,9 +52,6 @@ func (s *sliceProcessor[T, R]) process(ctx context.Context) ([]R, error) {
 
 	orderMap := make(map[int64]int, len(s.tasks))
 	results := make([]R, len(s.tasks))
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	submittedTasks := make([]*submittedTask[T, R], len(s.tasks))
 	for i, task := range s.tasks {
@@ -114,9 +112,6 @@ func (m *mapProcessor[T, R]) process(ctx context.Context) (map[string]R, error) 
 	keyMap := make(map[int64]string, len(m.tasks))
 	results := make(map[string]R, len(m.tasks))
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	submittedTasks := make([]*submittedTask[T, R], 0, len(m.tasks))
 	taskID := int64(0)
 	for key, task := range m.tasks {
@@ -139,9 +134,11 @@ func (m *mapProcessor[T, R]) process(ctx context.Context) (map[string]R, error) 
 //
 // The function continues collecting all n results even after encountering an error,
 // ensuring proper cleanup and allowing the callback to process all results.
+// Context errors (Canceled, DeadlineExceeded) are prioritized over other errors.
 func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Result[R, int64])) error {
 	debugLog("collect: expecting %d results", n)
 	var firstErr error
+	var contextErr error
 	collected := 0
 	for range n {
 		result, ok := <-resChan
@@ -149,14 +146,25 @@ func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Re
 			break
 		}
 		collected++
-		if result != nil && result.Error != nil && firstErr == nil {
-			firstErr = result.Error
+		if result != nil && result.Error != nil {
+			// Prioritize context errors over other errors
+			if errors.Is(result.Error, context.Canceled) || errors.Is(result.Error, context.DeadlineExceeded) {
+				if contextErr == nil {
+					contextErr = result.Error
+				}
+			} else if firstErr == nil {
+				firstErr = result.Error
+			}
 		}
 		if result != nil {
 			onResult(result)
 		}
 	}
 
+	// Return context error if present, otherwise return first error
+	if contextErr != nil {
+		return contextErr
+	}
 	return firstErr
 }
 
@@ -235,13 +243,28 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 	}()
 
 	var submittedCount int
+	var submissionErr error
+
+	// First, try to get submission result or context done
 	select {
-	case err := <-submitErrChan:
-		return err
+	case submissionErr = <-submitErrChan:
+		debugLog("runScheduler: got submission error: %v", submissionErr)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return submissionErr
+		}
 	case submittedCount = <-submittedCountChan:
+		debugLog("runScheduler: submitted %d tasks", submittedCount)
 	case <-ctx.Done():
-		submittedCount = len(tasks) // Will collect as many as available
+		return ctx.Err()
 	}
 
-	return collect(submittedCount, resChan, onResult)
+	err = collect(submittedCount, resChan, onResult)
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }

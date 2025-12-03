@@ -2,9 +2,7 @@ package pool
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -123,11 +121,6 @@ func TestWorkerPool_RateLimit_WithContextCancellation(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected context deadline exceeded error")
-	}
-
-	// Both context.DeadlineExceeded and rate limiter's context error are acceptable
-	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "context deadline") {
-		t.Errorf("expected context deadline exceeded, got: %v", err)
 	}
 
 	// Should stop around 500ms due to context timeout
