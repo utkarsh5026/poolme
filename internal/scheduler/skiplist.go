@@ -310,9 +310,9 @@ type slStrategy[T any, R any] struct {
 	// conf holds the processor configuration including the priority comparison function.
 	conf *ProcessorConfig[T, R]
 
-	// availableChan signals workers when tasks are available.
-	// Buffered to reduce contention during high submission rates.
-	availableChan chan struct{}
+	// available signals workers when tasks are available.
+	// Non-blocking signals prevent submission from blocking when workers are busy.
+	available *workerSignal
 }
 
 // newSlStrategy creates a new skip list-based scheduling strategy.
@@ -331,9 +331,9 @@ func newSlStrategy[T any, R any](conf *ProcessorConfig[T, R], tasks []*types.Sub
 	}
 
 	return &slStrategy[T, R]{
-		sl:            sl,
-		conf:          conf,
-		availableChan: make(chan struct{}, conf.TaskBuffer),
+		sl:        sl,
+		conf:      conf,
+		available: newWorkerSignal(),
 	}
 }
 
@@ -345,12 +345,7 @@ func newSlStrategy[T any, R any](conf *ProcessorConfig[T, R], tasks []*types.Sub
 // Returns nil (no errors in skip list submission).
 func (s *slStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	s.sl.Push(task)
-
-	select {
-	case s.availableChan <- struct{}{}:
-	default:
-	}
-
+	s.available.Signal()
 	return nil
 }
 
@@ -366,10 +361,7 @@ func (s *slStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int,
 	}
 
 	for range tasks {
-		select {
-		case s.availableChan <- struct{}{}:
-		default:
-		}
+		s.available.Signal()
 	}
 
 	return len(tasks), nil
@@ -378,10 +370,10 @@ func (s *slStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int,
 // Worker implements the worker loop for processing tasks from the skip list.
 //
 // The worker:
-//  1. Waits for a signal on availableChan indicating tasks are available
+//  1. Waits for a signal on available.Wait() indicating tasks are available
 //  2. Pops tasks from the skip list until empty
 //  3. Processes each task using the executor function
-//  4. Drains remaining tasks on context cancellation or channel close
+//  4. Drains remaining tasks on context cancellation or signal close
 func (s *slStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
 	drainFunc := func() {
 		s.drain(ctx, executor, h)
@@ -393,7 +385,7 @@ func (s *slStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor 
 			drainFunc()
 			return ctx.Err()
 
-		case _, ok := <-s.availableChan:
+		case _, ok := <-s.available.Wait():
 			if !ok {
 				return nil
 			}
@@ -411,10 +403,10 @@ func (s *slStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor 
 	}
 }
 
-// Shutdown closes the available channel, signaling all workers to drain and exit.
+// Shutdown closes the available signal, signaling all workers to drain and exit.
 // After shutdown, no new tasks can be submitted.
 func (s *slStrategy[T, R]) Shutdown() {
-	close(s.availableChan)
+	s.available.Close()
 }
 
 // drain processes all remaining tasks in the skip list during shutdown.
