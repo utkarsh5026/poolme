@@ -39,4 +39,6 @@ docs/.vitepress/dist/
 *.txt
 *.prof
 
+!requirements.txt
+
 benchmark-data/
