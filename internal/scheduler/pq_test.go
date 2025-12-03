@@ -292,7 +292,7 @@ func TestPriorityQueueStrategy_Submit(t *testing.T) {
 
 		// Should receive signal from availableChan
 		select {
-		case <-strategy.availableChan:
+		case <-strategy.available.Wait():
 			// Success
 		case <-time.After(100 * time.Millisecond):
 			t.Error("expected signal on availableChan")
@@ -605,7 +605,7 @@ func TestPriorityQueueStrategy_Shutdown(t *testing.T) {
 
 		// availableChan should be closed
 		select {
-		case _, ok := <-strategy.availableChan:
+		case _, ok := <-strategy.available.Wait():
 			if ok {
 				t.Error("expected availableChan to be closed")
 			}
@@ -918,7 +918,7 @@ func BenchmarkPriorityQueueStrategy_Submit(b *testing.B) {
 
 	// Drain the channel in background to prevent deadlock
 	go func() {
-		for range strategy.availableChan {
+		for range strategy.available.Wait() {
 		}
 	}()
 
@@ -945,7 +945,7 @@ func BenchmarkPriorityQueueStrategy_SubmitBatch(b *testing.B) {
 
 	// Drain the channel in background to prevent deadlock
 	go func() {
-		for range strategy.availableChan {
+		for range strategy.available.Wait() {
 		}
 	}()
 
