@@ -347,7 +347,7 @@ func (s *mpmc[T, R]) drainQueue(ctx context.Context, executor types.ProcessFunc[
 		if !ok {
 			return
 		}
-		_ = executeSubmitted(ctx, task, s.conf, executor, h)
+		s.runner.ExecuteWithoutCare(ctx, task, executor, h)
 	}
 }
 

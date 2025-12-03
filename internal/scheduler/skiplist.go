@@ -425,7 +425,7 @@ func (s *slStrategy[T, R]) drain(ctx context.Context, f types.ProcessFunc[T, R],
 		if task == nil {
 			return
 		}
-		_ = executeSubmitted(ctx, task, s.conf, f, h)
+		s.runner.ExecuteWithoutCare(ctx, task, f, h)
 	}
 }
 

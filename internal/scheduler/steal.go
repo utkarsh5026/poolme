@@ -419,7 +419,7 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 			if t == nil {
 				break
 			}
-			_ = executeSubmitted(ctx, t, s.conf, executor, h)
+			s.runner.ExecuteWithoutCare(ctx, t, executor, h)
 		}
 	}()
 
@@ -432,7 +432,7 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 			if t == nil {
 				break
 			}
-			_ = executeSubmitted(ctx, t, s.conf, executor, h)
+			s.runner.ExecuteWithoutCare(ctx, t, executor, h)
 		}
 	}()
 

@@ -192,7 +192,7 @@ func (b *bitmaskStrategy[T, R]) drain(
 			if !ok {
 				return
 			}
-			_ = executeSubmitted(ctx, task, b.config, executor, h)
+			b.runner.ExecuteWithoutCare(ctx, task, executor, h)
 		default:
 			// Worker channel empty, now help drain global queue
 			// All workers cooperatively drain the global queue during shutdown
@@ -202,7 +202,7 @@ func (b *bitmaskStrategy[T, R]) drain(
 					if !ok {
 						return
 					}
-					_ = executeSubmitted(ctx, task, b.config, executor, h)
+					b.runner.ExecuteWithoutCare(ctx, task, executor, h)
 				default:
 					return
 				}

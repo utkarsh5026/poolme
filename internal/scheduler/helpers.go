@@ -33,114 +33,6 @@ func nextPowerOfTwo(n int) int {
 	return power
 }
 
-// executeSubmitted executes a submitted task and sends the result to its associated future.
-// This function is called by workers to process tasks that were submitted via SubmitWithFuture.
-// It wraps the task execution logic and ensures the result is properly delivered to the waiting future.
-func executeSubmitted[T, R any](ctx context.Context, s *types.SubmittedTask[T, R], conf *ProcessorConfig[T, R], executor types.ProcessFunc[T, R], handler types.ResultHandler[T, R]) error {
-	result, err := executeTask(ctx, conf, s.Task, executor)
-	handler(s, types.NewResult(result, s.Id, err))
-	return err
-}
-
-// executeTask encapsulates the common logic for executing a task with hooks, rate limiting, and processing.
-// This function is used by both worker and runSubmitWorker to avoid code duplication.
-// It handles rate limiting, hook execution (BeforeTaskStart and onTaskEnd), and task processing with retry.
-func executeTask[T, R any](
-	ctx context.Context,
-	conf *ProcessorConfig[T, R],
-	task T,
-	processFn types.ProcessFunc[T, R],
-) (R, error) {
-	if conf.RateLimiter != nil {
-		if err := conf.RateLimiter.Wait(ctx); err != nil {
-			var zero R
-			// Rate limiter's error doesn't wrap context errors, so check context explicitly
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return zero, ctxErr
-			}
-			return zero, err
-		}
-	}
-
-	if conf.BeforeTaskStart != nil {
-		conf.BeforeTaskStart(task)
-	}
-
-	result, err := processWithRecovery(ctx, conf, task, processFn)
-
-	if conf.OnTaskEnd != nil {
-		conf.OnTaskEnd(task, result, err)
-	}
-
-	return result, err
-}
-
-// processWithRecovery executes a task with panic recovery and retry logic.
-// If a panic occurs, it's converted to an error to prevent crashing the worker.
-// Retries use exponential backoff if initialDelay is configured.
-func processWithRecovery[T, R any](
-	ctx context.Context,
-	conf *ProcessorConfig[T, R],
-	task T,
-	processFn types.ProcessFunc[T, R],
-) (result R, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			buf := make([]byte, 4096)
-			n := runtime.Stack(buf, false)
-			err = fmt.Errorf("worker panic: %v\nstack trace:\n%s", r, buf[:n])
-		}
-	}()
-
-	return processWithRetry(ctx, task, conf, processFn)
-}
-
-// processWithRetry executes the given processFn for the task, retrying up to wp.maxAttempts times on error.
-// It uses the configured backoff strategy to calculate delays between retries.
-// If wp.onRetry is set, it is called before each retry (i.e., on every failure except the last).
-// The function will respect context cancellation and abort early if the context is done.
-// On success, it returns the result and nil error; otherwise, the final error is returned (after retries).
-func processWithRetry[T, R any](
-	ctx context.Context,
-	task T,
-	conf *ProcessorConfig[T, R],
-	processFn types.ProcessFunc[T, R],
-) (R, error) {
-	var result R
-	var err error
-	maxAttempts := max(conf.MaxAttempts, 1)
-
-	for attempt := range maxAttempts {
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		default:
-		}
-
-		if attempt > 0 && conf.BackoffStrategy != nil {
-			delay := conf.BackoffStrategy.NextDelay(attempt-1, err)
-			if delay > 0 {
-				select {
-				case <-time.After(delay):
-				case <-ctx.Done():
-					return result, ctx.Err()
-				}
-			}
-		}
-
-		result, err = processFn(ctx, task)
-		if err == nil {
-			return result, nil
-		}
-
-		if conf.OnRetry != nil && attempt < maxAttempts-1 {
-			conf.OnRetry(task, attempt+1, err)
-		}
-	}
-
-	return result, err
-}
-
 // workerSignal provides a thread-safe signaling mechanism for coordinating worker availability.
 // Unlike quitter which signals shutdown by closing the channel, workerSignal sends discrete
 // signals to indicate worker state changes (e.g., worker becoming available).
@@ -198,11 +90,16 @@ func (ws *workerSignal) Wait() <-chan signal {
 	return ws.sig
 }
 
+// workerRunner is a generic struct that encapsulates the logic for running tasks
+// within a worker, using the provided processor configuration and scheduler.
+// T is the task type, R is the result type.
 type workerRunner[T, R any] struct {
-	config    *ProcessorConfig[T, R]
-	scheduler SchedulingStrategy[T, R]
+	config    *ProcessorConfig[T, R]   // Processor configuration (rate limiting, hooks, options)
+	scheduler SchedulingStrategy[T, R] // Scheduling strategy for managing tasks/workers
 }
 
+// newWorkerRunner creates a new workerRunner instance for the given processor configuration
+// and scheduling strategy.
 func newWorkerRunner[T, R any](conf *ProcessorConfig[T, R], s SchedulingStrategy[T, R]) *workerRunner[T, R] {
 	return &workerRunner[T, R]{
 		config:    conf,
@@ -210,7 +107,15 @@ func newWorkerRunner[T, R any](conf *ProcessorConfig[T, R], s SchedulingStrategy
 	}
 }
 
-func (w *workerRunner[T, R]) Execute(ctx context.Context, s *types.SubmittedTask[T, R], f types.ProcessFunc[T, R], h types.ResultHandler[T, R], d drainFunc) error {
+// Execute runs a single submitted task using the provided processing function, result handler, and
+// optional drain function. It handles error propagation and worker shutdown logic based on the outcome.
+func (w *workerRunner[T, R]) Execute(
+	ctx context.Context,
+	s *types.SubmittedTask[T, R],
+	f types.ProcessFunc[T, R],
+	h types.ResultHandler[T, R],
+	d drainFunc,
+) error {
 	result, err := w.executeTask(ctx, s.Task, f)
 	h(s, types.NewResult(result, s.Id, err))
 
@@ -218,10 +123,12 @@ func (w *workerRunner[T, R]) Execute(ctx context.Context, s *types.SubmittedTask
 		return nil
 	}
 
+	// On non-context error & not continuing on error, initiate shutdown
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !w.config.ContinueOnErr {
 		w.scheduler.Shutdown()
 	}
 
+	// On context cancellation or deadline exceeded, drain (if needed) and return error
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		if d != nil {
 			d()
@@ -229,10 +136,12 @@ func (w *workerRunner[T, R]) Execute(ctx context.Context, s *types.SubmittedTask
 		return err
 	}
 
+	// If not continuing on error, return the error
 	if !w.config.ContinueOnErr {
 		return err
 	}
 
+	// Otherwise, suppress error (because ContinueOnErr is true)
 	return nil
 }
 
@@ -329,4 +238,17 @@ func (w *workerRunner[T, R]) processWithRetry(
 	}
 
 	return result, err
+}
+
+// ExecuteWithoutCare runs the provided executor function for the given submitted task without performing any retries or advanced error handling.
+// The resulting value and error, along with the task's ID, are packaged into a types.Result and passed to the given result handler.
+// This is a "fire-and-forget" execution style for simple task runs.
+func (w *workerRunner[T, R]) ExecuteWithoutCare(
+	ctx context.Context,
+	s *types.SubmittedTask[T, R],
+	executor types.ProcessFunc[T, R],
+	handler types.ResultHandler[T, R],
+) {
+	result, err := w.executeTask(ctx, s.Task, executor)
+	handler(s, types.NewResult(result, s.Id, err))
 }

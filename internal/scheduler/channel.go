@@ -231,7 +231,7 @@ func (s *channelStrategy[T, R]) drain(
 			if !ok {
 				return
 			}
-			_ = executeSubmitted(ctx, t, s.config, executor, h)
+			s.runner.ExecuteWithoutCare(ctx, t, executor, h)
 			drained++
 		default:
 			return
