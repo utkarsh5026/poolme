@@ -3,7 +3,6 @@ package benchmarks
 import (
 	"context"
 	"fmt"
-	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -384,7 +383,7 @@ func BenchmarkStrategy_HighContention(b *testing.B) {
 
 	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			tasks := make([]int, taskCount)
 			for j := range tasks {
 				tasks[j] = j
@@ -421,7 +420,7 @@ func BenchmarkStrategy_BurstLoad(b *testing.B) {
 		var totalTasks atomic.Int64
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			wp := pool.NewWorkerPool[int, int](s.opts...)
 
 			for _, batchSize := range burstPattern {
@@ -466,7 +465,7 @@ func BenchmarkStrategy_PriorityQueue(b *testing.B) {
 
 	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			tasks := make([]int, taskCount)
 			for j := range tasks {
 				tasks[j] = j
@@ -506,7 +505,7 @@ func BenchmarkStrategy_CacheLocality(b *testing.B) {
 
 	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			tasks := make([]int, taskCount)
 			for j := range tasks {
 				tasks[j] = j
@@ -539,7 +538,7 @@ func BenchmarkStrategy_TailLatency(b *testing.B) {
 		}
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for i := 0; b.Loop(); i++ {
 			var latencies []time.Duration
 			var mu sync.Mutex
 
@@ -600,7 +599,7 @@ func BenchmarkStrategy_ExtremeImbalance(b *testing.B) {
 
 	runStrategyBenchmark(b, strategies, func(b *testing.B, s strategyConfig) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			tasks := make([]int, taskCount)
 			for j := range tasks {
 				tasks[j] = j
@@ -613,78 +612,4 @@ func BenchmarkStrategy_ExtremeImbalance(b *testing.B) {
 			}
 		}
 	})
-}
-
-// =============================================================================
-// Benchmark Workload Generators
-// =============================================================================
-
-// cpuBoundWork simulates a CPU-intensive operation
-func cpuBoundWork(iterations int) func(ctx context.Context, task int) (int, error) {
-	return func(ctx context.Context, task int) (int, error) {
-		result := 0
-		for i := range iterations {
-			result += i * task
-		}
-		return result, nil
-	}
-}
-
-// ioBoundWork simulates an I/O operation with a delay
-func ioBoundWork(delay time.Duration) func(ctx context.Context, task int) (int, error) {
-	return func(ctx context.Context, task int) (int, error) {
-		select {
-		case <-time.After(delay):
-			return task * 2, nil
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		}
-	}
-}
-
-// mixedWork simulates a realistic workload with variable processing time
-func mixedWork() func(ctx context.Context, task int) (int, error) {
-	return func(ctx context.Context, task int) (int, error) {
-		// Simulate variable processing time (0-10ms)
-		delay := time.Duration(task%10) * time.Millisecond
-		time.Sleep(delay)
-
-		// Do some computation
-		result := 0
-		for i := range 1000 {
-			result += i
-		}
-		return result + task, nil
-	}
-}
-
-func percentile(latencies []time.Duration, p float64) time.Duration {
-	if len(latencies) == 0 {
-		return 0
-	}
-
-	// Create a copy and sort
-	sorted := make([]time.Duration, len(latencies))
-	copy(sorted, latencies)
-
-	// Simple bubble sort (fine for benchmark data)
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[i] > sorted[j] {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
-
-	// Calculate index using the nearest-rank method
-	// For p=0.50 with 100 elements, we want the 50th element (index 49)
-	index := int(math.Round(p * float64(len(sorted)-1)))
-	if index < 0 {
-		index = 0
-	}
-	if index >= len(sorted) {
-		index = len(sorted) - 1
-	}
-
-	return sorted[index]
 }
