@@ -82,6 +82,7 @@ func runStrategyTest(t *testing.T, testFunc func(t *testing.T, s strategyConfig)
 
 	for _, strategy := range strategies {
 		t.Run(strategy.name, func(t *testing.T) {
+			t.Parallel()
 			testFunc(t, strategy)
 		})
 	}

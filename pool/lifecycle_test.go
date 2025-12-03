@@ -170,6 +170,7 @@ func TestWorkerPool_Shutdown(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to start: %v", err)
 			}
+			defer pool.Shutdown(time.Second)
 
 			// Submit some tasks
 			for i := 0; i < 5; i++ {
@@ -193,7 +194,7 @@ func TestWorkerPool_Shutdown_GracefulWait(t *testing.T) {
 			var completedCount atomic.Int32
 
 			processFn := func(ctx context.Context, task int) (int, error) {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond)
 				completedCount.Add(1)
 				return task * 2, nil
 			}
@@ -202,6 +203,7 @@ func TestWorkerPool_Shutdown_GracefulWait(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to start: %v", err)
 			}
+			defer pool.Shutdown(time.Second)
 
 			// Submit tasks
 			numTasks := 10
@@ -256,6 +258,7 @@ func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to start: %v", err)
 			}
+			defer pool.Shutdown(time.Second)
 
 			// Submit task
 			_, err = pool.Submit(1)
@@ -295,6 +298,7 @@ func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to start: %v", err)
 			}
+			defer pool.Shutdown(time.Second)
 
 			// Submit tasks
 			for i := 0; i < 5; i++ {
@@ -328,6 +332,7 @@ func TestWorkerPool_Shutdown_InFlightTasks(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to start: %v", err)
 		}
+		defer pool.Shutdown(10 * time.Second)
 
 		// Submit tasks
 		numTasks := 20
@@ -423,6 +428,7 @@ func TestWorkerPool_Lifecycle_Integration(t *testing.T) {
 			if err != nil {
 				t.Fatalf("start failed: %v", err)
 			}
+			defer pool.Shutdown(time.Second)
 
 			// Submit tasks
 			numTasks := 50
@@ -488,6 +494,7 @@ func TestWorkerPool_Lifecycle_ContextCancellation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("start failed: %v", err)
 		}
+		defer pool.Shutdown(time.Second)
 
 		// Submit tasks
 		numTasks := 10
