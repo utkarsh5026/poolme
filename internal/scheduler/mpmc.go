@@ -273,15 +273,18 @@ type mpmc[T any, R any] struct {
 	conf         *ProcessorConfig[T, R]
 	quit         chan struct{}
 	shutdownOnce sync.Once
+	runner       *workerRunner[T, R]
 }
 
 // newMPMCStrategy creates a new MPMC queue strategy with the given configuration
 func newMPMCStrategy[T any, R any](conf *ProcessorConfig[T, R], bounded bool, capacity int) *mpmc[T, R] {
-	return &mpmc[T, R]{
+	m := &mpmc[T, R]{
 		queue: newMPMCQueue[*types.SubmittedTask[T, R]](capacity, bounded),
 		conf:  conf,
 		quit:  make(chan struct{}),
 	}
+	m.runner = newWorkerRunner(conf, m)
+	return m
 }
 
 // Submit enqueues a task into the MPMC queue
@@ -331,11 +334,7 @@ func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor types.
 			continue
 		}
 
-		if err := handleWithCare(ctx, task, s.conf, executor, h, drainFunc); err != nil {
-			// Signal all workers to stop if this is a non-context error and continueOnErr is false
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !s.conf.ContinueOnErr {
-				s.Shutdown()
-			}
+		if err := s.runner.Execute(ctx, task, executor, h, drainFunc); err != nil {
 			return err
 		}
 	}

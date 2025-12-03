@@ -71,7 +71,8 @@ type lmaxStrategy[T any, R any] struct {
 	conf     *ProcessorConfig[T, R]
 	capacity int
 
-	quit *workerSignal
+	quit   *workerSignal
+	runner *workerRunner[T, R]
 }
 
 // newDisruptorStrategy creates a new Disruptor scheduling strategy.
@@ -112,6 +113,7 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 	l.tail.set(initialSequence)
 	l.consumerSeq.set(initialSequence)
 	l.gatingSeq.set(initialSequence)
+	l.runner = newWorkerRunner(conf, l)
 
 	return l
 }
@@ -262,7 +264,7 @@ func (l *lmaxStrategy[T, R]) drain(ctx context.Context, workerID int64, executor
 
 			task := slot.task
 			if task != nil {
-				_ = handleWithCare(ctx, task, l.conf, executor, h, nil)
+				_ = l.runner.Execute(ctx, task, executor, h, nil)
 				debugLog("drain processed task: seq=%d", seq)
 			}
 			l.workerSeqs[workerID].set(seq)
@@ -302,11 +304,10 @@ func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, execut
 		}
 
 		task := l.ring[seq&l.mask].task
-		if err := handleWithCare(ctx, task, l.conf, executor, h, nil); err != nil {
-			debugLog("task executed with error: seq=%d, err=%v", seq, err)
+		if err := l.runner.Execute(ctx, task, executor, h, nil); err != nil {
 			return err
 		}
-		debugLog("task executed successfully: seq=%d", seq)
+
 		l.workerSeqs[workerID].set(seq)
 	}
 

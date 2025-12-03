@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -195,6 +194,7 @@ type workSteal[T any, R any] struct {
 	stealSeed                 atomic.Uint64 // Round-robin counter for task distribution
 	workerCount, maxLocalSize int
 	quit                      *workerSignal
+	runner                    *workerRunner[T, R]
 }
 
 func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConfig[T, R]) *workSteal[T, R] {
@@ -212,6 +212,7 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConf
 		w.workerQueues[i] = newWSDeque[T, R](maxLocalSize)
 	}
 
+	w.runner = newWorkerRunner(conf, w)
 	return w
 }
 
@@ -256,13 +257,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 	}
 
 	executeTask := func(t *types.SubmittedTask[T, R]) error {
-		if err := handleWithCare(ctx, t, s.conf, executor, h, drain); err != nil {
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !s.conf.ContinueOnErr {
-				s.Shutdown()
-			}
-			return err
-		}
-		return nil
+		return s.runner.Execute(ctx, t, executor, h, drain)
 	}
 
 	for {

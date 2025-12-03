@@ -3,7 +3,6 @@ package scheduler
 import (
 	"container/heap"
 	"context"
-	"errors"
 	"sync"
 
 	"github.com/utkarsh5026/poolme/internal/types"
@@ -76,6 +75,7 @@ type priorityQueueStrategy[T any, R any] struct {
 	conf      *ProcessorConfig[T, R]
 	mu        sync.Mutex
 	available *workerSignal
+	runner    *workerRunner[T, R]
 }
 
 // newPriorityQueueStrategy creates a new priority queue-based scheduling strategy.
@@ -83,11 +83,14 @@ func newPriorityQueueStrategy[T any, R any](conf *ProcessorConfig[T, R], tasks [
 	if tasks == nil {
 		tasks = make([]*types.SubmittedTask[T, R], 0, conf.TaskBuffer)
 	}
-	return &priorityQueueStrategy[T, R]{
+	p := &priorityQueueStrategy[T, R]{
 		pq:        newPriorityQueue(tasks, conf.LessFunc),
 		conf:      conf,
 		available: newWorkerSignal(),
 	}
+
+	p.runner = newWorkerRunner(conf, p)
+	return p
 }
 
 // Submit adds a task to the priority queue and signals waiting workers.
@@ -173,11 +176,8 @@ func (s *priorityQueueStrategy[T, R]) runInLoop(ctx context.Context, executor ty
 		if t == nil {
 			break
 		}
-		if err := handleWithCare(ctx, t, s.conf, executor, h, drainFunc); err != nil && !ignoreErr {
-			// Signal all workers to stop if this is a non-context error and continueOnErr is false
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !s.conf.ContinueOnErr {
-				s.Shutdown()
-			}
+
+		if err := s.runner.Execute(ctx, t, executor, h, drainFunc); err != nil && !ignoreErr {
 			return err
 		}
 	}

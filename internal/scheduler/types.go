@@ -10,6 +10,8 @@ import (
 // signal is used to signal worker goroutines for wakeup or shutdown.
 type signal struct{}
 
+type drainFunc func()
+
 type SchedulingStrategyType int
 
 const (

@@ -35,6 +35,8 @@ type bitmaskStrategy[T, R any] struct {
 	config *ProcessorConfig[T, R]
 	// quit is closed to signal shutdown to ongoing task submissions.
 	quit *workerSignal
+
+	runner *workerRunner[T, R]
 }
 
 // newBitmaskStrategy constructs a bitmaskStrategy using the given config.
@@ -58,15 +60,15 @@ func newBitmaskStrategy[T, R any](conf *ProcessorConfig[T, R]) *bitmaskStrategy[
 	}
 
 	globalQueueSize := max(conf.TaskBuffer, conf.WorkerCount*10)
-	strategy := &bitmaskStrategy[T, R]{
+	b := &bitmaskStrategy[T, R]{
 		workerChans: queues,
 		globalQueue: make(chan *types.SubmittedTask[T, R], globalQueueSize),
 		config:      conf,
 		quit:        newWorkerSignal(),
 	}
-	strategy.idleMask.Store(initialMask)
-
-	return strategy
+	b.idleMask.Store(initialMask)
+	b.runner = newWorkerRunner(conf, b)
+	return b
 }
 
 // Submit attempts to find and claim an idle worker for the task,
@@ -146,9 +148,9 @@ func (b *bitmaskStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 		b.drain(ctx, executor, h, workerID)
 	}
 
+	var task *types.SubmittedTask[T, R]
 	for {
 		b.announceIdle(int(workerID))
-
 		select {
 		case <-ctx.Done():
 			drain()
@@ -158,15 +160,13 @@ func (b *bitmaskStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 			drain()
 			return nil
 
-		case task := <-myChan:
-			if err := b.execute(ctx, task, workerID, executor, h); err != nil {
-				drain()
-				return err
-			}
-
-		case task := <-b.globalQueue:
+		case task = <-myChan:
+		case task = <-b.globalQueue:
 			b.markBusy(myBit)
-			if err := b.execute(ctx, task, workerID, executor, h); err != nil {
+		}
+
+		if task != nil {
+			if err := b.runner.Execute(ctx, task, executor, h, drain); err != nil {
 				drain()
 				return err
 			}
@@ -209,18 +209,6 @@ func (b *bitmaskStrategy[T, R]) drain(
 			}
 		}
 	}
-}
-
-// execute runs the executor on the given task, invokes result handler (h),
-// and manages error handling per config. On failure with ContinueOnErr, re-announces idle.
-func (b *bitmaskStrategy[T, R]) execute(ctx context.Context, task *types.SubmittedTask[T, R], workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
-	err := executeSubmitted(ctx, task, b.config, executor, h)
-	if err := handleExecutionError(err, b.config.ContinueOnErr, func() {
-		b.announceIdle(int(workerID))
-	}); err != nil {
-		return err
-	}
-	return nil
 }
 
 // announceIdle sets this worker's bit to 1 (idle) in the mask if not already set.

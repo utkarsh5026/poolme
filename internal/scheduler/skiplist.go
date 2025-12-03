@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"math/bits"
 	"math/rand/v2"
 	"sync"
@@ -314,6 +313,9 @@ type slStrategy[T any, R any] struct {
 	// available signals workers when tasks are available.
 	// Non-blocking signals prevent submission from blocking when workers are busy.
 	available *workerSignal
+
+	// runner manages worker execution loops.
+	runner *workerRunner[T, R]
 }
 
 // newSlStrategy creates a new skip list-based scheduling strategy.
@@ -331,11 +333,14 @@ func newSlStrategy[T any, R any](conf *ProcessorConfig[T, R], tasks []*types.Sub
 		sl.Push(task)
 	}
 
-	return &slStrategy[T, R]{
+	s := &slStrategy[T, R]{
 		sl:        sl,
 		conf:      conf,
 		available: newWorkerSignal(),
 	}
+
+	s.runner = newWorkerRunner(conf, s)
+	return s
 }
 
 // Submit adds a single task to the skip list and signals a worker.
@@ -396,10 +401,7 @@ func (s *slStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor 
 				if task == nil {
 					break
 				}
-				if err := handleWithCare(ctx, task, s.conf, executor, h, drainFunc); err != nil {
-					if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !s.conf.ContinueOnErr {
-						s.Shutdown()
-					}
+				if err := s.runner.Execute(ctx, task, executor, h, drainFunc); err != nil {
 					return err
 				}
 			}
