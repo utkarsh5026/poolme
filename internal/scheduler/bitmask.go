@@ -34,7 +34,7 @@ type bitmaskStrategy[T, R any] struct {
 	// config holds user configuration.
 	config *ProcessorConfig[T, R]
 	// quit is closed to signal shutdown to ongoing task submissions.
-	quit chan struct{}
+	quit *workerSignal
 }
 
 // newBitmaskStrategy constructs a bitmaskStrategy using the given config.
@@ -62,7 +62,7 @@ func newBitmaskStrategy[T, R any](conf *ProcessorConfig[T, R]) *bitmaskStrategy[
 		workerChans: queues,
 		globalQueue: make(chan *types.SubmittedTask[T, R], globalQueueSize),
 		config:      conf,
-		quit:        make(chan struct{}),
+		quit:        newWorkerSignal(),
 	}
 	strategy.idleMask.Store(initialMask)
 
@@ -76,7 +76,7 @@ func newBitmaskStrategy[T, R any](conf *ProcessorConfig[T, R]) *bitmaskStrategy[
 func (s *bitmaskStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	// Check if shutting down first to prioritize cancellation
 	select {
-	case <-s.quit:
+	case <-s.quit.Wait():
 		return ErrSchedulerClosed
 	default:
 	}
@@ -96,7 +96,7 @@ func (s *bitmaskStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 			select {
 			case s.workerChans[workerID] <- task:
 				return nil
-			case <-s.quit:
+			case <-s.quit.Wait():
 				// Shutdown signal received, restore the bit and exit
 				s.announceIdle(workerID)
 				return ErrSchedulerClosed
@@ -107,7 +107,7 @@ func (s *bitmaskStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	select {
 	case s.globalQueue <- task:
 		return nil
-	case <-s.quit:
+	case <-s.quit.Wait():
 		return ErrSchedulerClosed
 	}
 }
@@ -154,7 +154,7 @@ func (b *bitmaskStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 			drain()
 			return ctx.Err()
 
-		case <-b.quit:
+		case <-b.quit.Wait():
 			drain()
 			return nil
 
@@ -254,5 +254,5 @@ func (s *bitmaskStrategy[T, R]) markBusy(myBit uint64) {
 // Shutdown gracefully shuts down the bitmask strategy by closing the quit channel.
 // This signals ongoing task submissions to stop.
 func (s *bitmaskStrategy[T, R]) Shutdown() {
-	close(s.quit)
+	s.quit.Close()
 }

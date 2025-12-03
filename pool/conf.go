@@ -76,6 +76,15 @@ const (
 	// Best for: Priority-based workloads with high concurrent task submission.
 	// Requires WithPriorityQueue or WithSkipList to be set with a priority function.
 	SchedulingSkipList
+
+	// SchedulingLmax uses the LMAX Disruptor pattern with a lock-free ring buffer.
+	// Pre-allocated ring buffer with sequence-based coordination for predictable performance.
+	// Features per-worker sequence tracking and cache-line padding to prevent false sharing.
+	// Provides mechanical sympathy for modern CPU architectures.
+	// Best for: Ultra-high throughput scenarios, predictable low-latency workloads,
+	// and systems requiring consistent performance under load.
+	// Uses a power-of-2 sized ring buffer (default 1024) for efficient modulo operations.
+	SchedulingLmax
 )
 
 type workerPoolConfig struct {
@@ -587,6 +596,40 @@ func WithSkipList[T any](lessFunc func(a, b T) bool) WorkerPoolOption {
 			}
 			return false
 		}
+	}
+}
+
+// WithLmax is a convenience option to enable LMAX Disruptor-based scheduling.
+// This is equivalent to WithSchedulingStrategy(SchedulingLmax).
+//
+// LMAX Disruptor provides:
+//   - Lock-free ring buffer with pre-allocated memory
+//   - Sequence-based coordination for predictable performance
+//   - Cache-line padding to prevent false sharing
+//   - Per-worker sequence tracking for efficient consumption
+//   - Mechanical sympathy for modern CPU architectures
+//
+// Best for:
+//   - Ultra-high throughput scenarios (millions of tasks per second)
+//   - Latency-sensitive applications requiring predictable performance
+//   - Systems where garbage collection pauses must be minimized
+//   - Financial trading, event processing, and real-time analytics
+//
+// Technical characteristics:
+//   - Uses power-of-2 sized ring buffer (default 1024)
+//   - Lock-free producers and consumers using CAS operations
+//   - Automatic batching for improved throughput
+//   - Gating sequences prevent ring buffer wrap-around
+//
+// Example:
+//
+//	pool := NewWorkerPool[int, string](
+//	    WithWorkerCount(8),
+//	    WithLmax(),
+//	)
+func WithLmax() WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.schedulingStrategy = SchedulingLmax
 	}
 }
 

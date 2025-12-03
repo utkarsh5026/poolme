@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/utkarsh5026/poolme/internal/types"
@@ -174,14 +176,70 @@ func handleWithCare[T, R any](
 		return nil
 	}
 
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if drainFunc != nil {
 		drainFunc()
-		return err
 	}
 
-	if !conf.ContinueOnErr {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !conf.ContinueOnErr {
 		return err
 	}
 
 	return nil
+}
+
+// workerSignal provides a thread-safe signaling mechanism for coordinating worker availability.
+// Unlike quitter which signals shutdown by closing the channel, workerSignal sends discrete
+// signals to indicate worker state changes (e.g., worker becoming available).
+// It combines signaling with safe closure to prevent panics when sending on closed channels.
+type workerSignal struct {
+	sig    chan signal // Channel for sending and receiving availability signals
+	closed atomic.Bool // Atomic flag indicating whether the channel is closed
+	once   sync.Once   // Ensures the channel is closed exactly once
+}
+
+// newWorkerSignal creates a new workerSignal instance with a buffered signal channel.
+// The channel has a buffer of 100 to prevent signal loss when workers haven't started yet.
+func newWorkerSignal() *workerSignal {
+	return &workerSignal{
+		sig: make(chan signal, 1),
+	}
+}
+
+// Close safely closes the signal channel.
+// This method is safe to call multiple times and from multiple goroutines.
+// Only the first call will close the channel; subsequent calls are no-ops.
+// After closing, Signal() calls will be no-ops and Wait() will return a closed channel.
+func (ws *workerSignal) Close() {
+	ws.once.Do(func() {
+		ws.closed.Store(true)
+		close(ws.sig)
+	})
+}
+
+// IsClosed returns true if Close has been called, false otherwise.
+// This provides a non-blocking way to check if the signal channel has been closed.
+func (ws *workerSignal) IsClosed() bool {
+	return ws.closed.Load()
+}
+
+// Signal attempts to send a signal on the channel without blocking.
+// If the channel is full or closed, the signal is dropped (non-blocking send).
+// This is useful for notifying listeners that a worker has become available
+// without blocking the signaling goroutine.
+func (ws *workerSignal) Signal() {
+	if ws.IsClosed() {
+		return
+	}
+
+	select {
+	case ws.sig <- signal{}:
+	default:
+	}
+}
+
+// Wait returns a receive-only channel that can be used to wait for signals.
+// Callers can select on this channel to be notified when Signal() is called.
+// If the signal has been closed, this will return a closed channel.
+func (ws *workerSignal) Wait() <-chan signal {
+	return ws.sig
 }

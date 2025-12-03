@@ -19,6 +19,7 @@ const (
 	SchedulingMPMC
 	SchedulingBitmask
 	SchedulingSkipList
+	SchedulingLmax
 )
 
 // processorConfig holds all configuration for a pool of workers and task scheduling.

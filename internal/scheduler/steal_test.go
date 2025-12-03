@@ -91,7 +91,7 @@ func TestWSDeque_PushBack(t *testing.T) {
 
 	// Push multiple tasks
 	for i := 2; i <= 10; i++ {
-		task := types.NewSubmittedTask[int, int](i*10, int64(i), types.NewFuture[int, int64]())
+		task := types.NewSubmittedTask(i*10, int64(i), types.NewFuture[int, int64]())
 		dq.PushBack(task)
 	}
 
@@ -109,7 +109,6 @@ func TestWSDeque_PushBack(t *testing.T) {
 func TestWSDeque_PopBack(t *testing.T) {
 	dq := newWSDeque[int, int](16)
 
-	// Pop from empty deque
 	task := dq.PopBack()
 	if task != nil {
 		t.Error("expected nil from empty deque")
@@ -992,7 +991,7 @@ func TestWorkSteal_Shutdown(t *testing.T) {
 
 	// Verify quit channel is closed
 	select {
-	case <-s.quit:
+	case <-s.quit.Wait():
 		// Good - quit channel is closed
 	default:
 		t.Error("quit channel was not closed")

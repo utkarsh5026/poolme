@@ -56,6 +56,9 @@ func CreateSchedulingStrategy[T, R any](conf *ProcessorConfig[T, R], tasks []*ty
 	case SchedulingBitmask:
 		s = newBitmaskStrategy(conf)
 
+	case SchedulingLmax:
+		s = newLmaxStrategy(conf, 0) // 0 uses default capacity (1024)
+
 	case SchedulingChannel:
 		fallthrough
 	default:

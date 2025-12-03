@@ -193,9 +193,7 @@ type workSteal[T any, R any] struct {
 	conf                      *ProcessorConfig[T, R]
 	stealSeed                 atomic.Uint64 // Round-robin counter for task distribution
 	workerCount, maxLocalSize int
-	quit                      chan signal
-	stopOnErr                 chan struct{} // Signal workers to stop on first error
-	stopOnce                  sync.Once     // Ensure stopOnErr is only closed once
+	quit                      *workerSignal
 }
 
 func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConfig[T, R]) *workSteal[T, R] {
@@ -203,8 +201,7 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConf
 	w := &workSteal[T, R]{
 		globalQueue:  newWSDeque[T, R](maxLocalSize),
 		maxLocalSize: maxLocalSize,
-		quit:         make(chan signal),
-		stopOnErr:    make(chan struct{}),
+		quit:         newWorkerSignal(),
 		workerQueues: make([]*wsDeque[T, R], n),
 		workerCount:  n,
 		conf:         conf,
@@ -275,9 +272,6 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 		for range fastCheckCounter {
 			if t := localQueue.PopBack(); t != nil {
 				if err := executeTask(t); err != nil {
-					// Signal other workers to stop on error
-					s.stopOnce.Do(func() { close(s.stopOnErr) })
-					drain()
 					return err
 				}
 				missCount = 0
@@ -298,11 +292,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 			}
 			s.glock.Unlock()
 
-			// Execute first task
 			if err := executeTask(batch[0]); err != nil {
-				// Signal other workers to stop on error
-				s.stopOnce.Do(func() { close(s.stopOnErr) })
-				drain()
 				return err
 			}
 			missCount = 0
@@ -317,9 +307,6 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 
 		if t := s.steal(int(workerID)); t != nil {
 			if err := executeTask(t); err != nil {
-				// Signal other workers to stop on error
-				s.stopOnce.Do(func() { close(s.stopOnErr) })
-				drain()
 				return err
 			}
 			missCount = 0
@@ -330,7 +317,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 
 		// Check if we should stop due to error signal
 		select {
-		case <-s.stopOnErr:
+		case <-s.quit.Wait():
 			drain()
 			return nil
 		default:
@@ -361,12 +348,9 @@ func (s *workSteal[T, R]) checkQuit(ctx context.Context, drainFunc func()) error
 	case <-ctx.Done():
 		drainFunc()
 		return ctx.Err()
-	case <-s.quit:
+	case <-s.quit.Wait():
 		drainFunc()
 		return ErrSchedulerClosed
-	case <-s.stopOnErr:
-		drainFunc()
-		return nil // Return nil so workers exit cleanly without propagating error
 	default:
 		return nil
 	}
@@ -457,5 +441,5 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 }
 
 func (s *workSteal[T, R]) Shutdown() {
-	close(s.quit)
+	s.quit.Close()
 }

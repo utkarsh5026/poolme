@@ -378,6 +378,7 @@ func TestWorkerPool_Submit_LongRunningStability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to start pool: %v", err)
 	}
+	defer p.Shutdown(5 * time.Second)
 
 	// Submit tasks in waves
 	numWaves := 10
