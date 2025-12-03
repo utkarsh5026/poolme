@@ -222,7 +222,7 @@ func TestChannelStrategy_SubmitBatchWithShutdown(t *testing.T) {
 	// Create a large batch that will exceed buffer capacity
 	batchSize := 100
 	tasks := make([]*types.SubmittedTask[int, int], batchSize)
-	for i := 0; i < batchSize; i++ {
+	for i := range batchSize {
 		future := types.NewFuture[int, int64]()
 		tasks[i] = types.NewSubmittedTask(i, int64(i), future)
 	}
@@ -248,7 +248,7 @@ func TestChannelStrategy_SubmitBatchWithShutdown(t *testing.T) {
 	<-done
 
 	// Verify shutdown interrupted the submission
-	if submitErr != context.Canceled {
+	if submitErr != ErrSchedulerClosed {
 		t.Errorf("expected context.Canceled error, got: %v", submitErr)
 	}
 

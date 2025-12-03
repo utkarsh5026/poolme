@@ -21,13 +21,15 @@ const (
 //
 // Each worker goroutine reads from its own channel to execute submitted tasks.
 type channelStrategy[T any, R any] struct {
-	config    *ProcessorConfig[T, R]            // Processor configuration parameters.
-	taskChans []chan *types.SubmittedTask[T, R] // Per-worker task channels.
-	counter   atomic.Int64                      // Atomic counter for round-robin channel selection.
-	quitter   *workerSignal                     // Quitter to signal shutdown.
-	affRouter *affinityRouter[T, R]             // Affinity router for consistent task routing.
-	submitWg  sync.WaitGroup                    // WaitGroup to track in-flight submissions
-	submitMu  sync.Mutex                        // Mutex to protect submission during shutdown
+	config       *ProcessorConfig[T, R]            // Processor configuration parameters.
+	taskChans    []chan *types.SubmittedTask[T, R] // Per-worker task channels.
+	counter      atomic.Int64                      // Atomic counter for round-robin channel selection.
+	quitter      *workerSignal                     // Quitter to signal shutdown.
+	affRouter    *affinityRouter[T, R]             // Affinity router for consistent task routing.
+	submitWg     sync.WaitGroup                    // WaitGroup to track in-flight submissions
+	submitMu     sync.Mutex                        // Mutex to protect submission during shutdown
+	shutdownOnce sync.Once                         // Ensures shutdown is called only once
+	runner       *workerRunner[T, R]
 }
 
 // newChannelStrategy creates a new instance of channelStrategy.
@@ -52,17 +54,18 @@ func newChannelStrategy[T any, R any](conf *ProcessorConfig[T, R]) *channelStrat
 		c.taskChans[i] = make(chan *types.SubmittedTask[T, R], conf.TaskBuffer)
 	}
 
+	c.runner = newWorkerRunner(conf, c)
 	return c
 }
 
 // Submit submits a single task to the next worker channel using round-robin scheduling.
-// Returns nil since this operation cannot fail synchronously.
+// Returns nil if successful, or an error if the scheduler is shutting down.
 func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	s.submitMu.Lock()
 	select {
 	case <-s.quitter.Wait():
 		s.submitMu.Unlock()
-		return context.Canceled
+		return ErrSchedulerClosed
 	default:
 	}
 	s.submitWg.Add(1)
@@ -71,20 +74,20 @@ func (s *channelStrategy[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 	defer s.submitWg.Done()
 
 	if exit := s.tryToSubmit(s.next(task), task); exit {
-		return context.Canceled
+		return ErrSchedulerClosed
 	}
 	return nil
 }
 
 // SubmitBatch submits a batch of tasks for execution synchronously.
 // Returns the number of tasks successfully submitted and an error if shutdown was signaled during submission.
-// If shutdown occurs mid-batch, returns the count of tasks submitted before shutdown and context.Canceled error.
+// If shutdown occurs mid-batch, returns the count of tasks submitted before shutdown and ErrSchedulerClosed error.
 func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
 	s.submitMu.Lock()
 	select {
 	case <-s.quitter.Wait():
 		s.submitMu.Unlock()
-		return 0, context.Canceled
+		return 0, ErrSchedulerClosed
 	default:
 	}
 	s.submitWg.Add(1)
@@ -97,9 +100,9 @@ func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) 
 		idx := s.next(task)
 		if exit := s.tryToSubmit(idx, task); exit {
 			if submitted == 0 {
-				return 0, context.Canceled
+				return 0, ErrSchedulerClosed
 			}
-			return submitted, context.Canceled
+			return submitted, ErrSchedulerClosed
 		}
 		submitted++
 	}
@@ -172,15 +175,17 @@ func (s *channelStrategy[T, R]) submitRoundRobin(idx int, task *types.SubmittedT
 // - Waits for all in-flight submissions to complete.
 // - Closes all worker task channels, signaling workers to exit.
 func (s *channelStrategy[T, R]) Shutdown() {
-	s.submitMu.Lock()
-	s.quitter.Close() // Signal ongoing submissions to stop
-	s.submitMu.Unlock()
+	s.shutdownOnce.Do(func() {
+		s.submitMu.Lock()
+		s.quitter.Close() // Signal ongoing submissions to stop
+		s.submitMu.Unlock()
 
-	s.submitWg.Wait() // Wait for all in-flight submissions to complete
+		s.submitWg.Wait() // Wait for all in-flight submissions to complete
 
-	for _, ch := range s.taskChans {
-		close(ch)
-	}
+		for _, ch := range s.taskChans {
+			close(ch)
+		}
+	})
 }
 
 // Worker runs the worker event loop for the specified workerID.
@@ -202,8 +207,7 @@ func (s *channelStrategy[T, R]) Worker(ctx context.Context, workerID int64, exec
 			if !ok {
 				return nil
 			}
-			if err := handleWithCare(ctx, t, s.config, executor, h, drain); err != nil {
-				drain()
+			if err := s.runner.Execute(ctx, t, executor, h, drain); err != nil {
 				return err
 			}
 		}
