@@ -152,7 +152,7 @@ func TestBitmaskStrategy_Submit(t *testing.T) {
 		strategy.globalQueue <- createSimpleTask(1, 1)
 
 		// Close the strategy
-		close(strategy.quit)
+		strategy.Shutdown()
 
 		task := createSimpleTask(42, 1)
 		err := strategy.Submit(task)
@@ -257,7 +257,7 @@ func TestBitmaskStrategy_SubmitBatch(t *testing.T) {
 		strategy := newBitmaskStrategy(conf)
 
 		// Close the strategy and mark all workers as busy
-		close(strategy.quit)
+		strategy.Shutdown()
 		strategy.idleMask.Store(0)
 
 		tasks := []*types.SubmittedTask[simpleTask, int]{
@@ -669,7 +669,7 @@ func TestBitmaskStrategy_Shutdown(t *testing.T) {
 
 		// quit channel should be closed
 		select {
-		case _, ok := <-strategy.quit:
+		case _, ok := <-strategy.quit.Wait():
 			if ok {
 				t.Error("expected quit channel to be closed")
 			}
