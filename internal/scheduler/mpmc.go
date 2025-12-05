@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"runtime"
-	"sync"
 	"sync/atomic"
 
 	"github.com/utkarsh5026/poolme/internal/types"
@@ -47,14 +46,11 @@ type mpmcQueue[T any] struct {
 	tail uint64
 	_    [cacheLinePadding - 8]byte
 
-	// Closed flag
-	closed atomic.Bool
-
 	// Notification channel for data (BUFFERED, NEVER CLOSED)
 	notifyC chan struct{}
 
 	// Notification channel for shutdown (UNBUFFERED, CLOSED ON SHUTDOWN)
-	closeC chan struct{}
+	close *workerSignal
 
 	// Configuration
 	bounded  bool
@@ -84,7 +80,7 @@ func newMPMCQueue[T any](capacity int, bounded bool) *mpmcQueue[T] {
 		bounded:  bounded,
 		capacity: capacity,
 		notifyC:  make(chan struct{}, 1),
-		closeC:   make(chan struct{}),
+		close:    newWorkerSignal(),
 	}
 }
 
@@ -92,19 +88,14 @@ func newMPMCQueue[T any](capacity int, bounded bool) *mpmcQueue[T] {
 // Returns ErrQueueClosed if queue is closed
 // Returns ErrQueueFull if queue is bounded and full (only in bounded mode)
 // Blocks if context allows until space is available
-func (q *mpmcQueue[T]) Enqueue(quit <-chan struct{}, value T) error {
-	if q.closed.Load() {
-		return ErrQueueClosed
-	}
+func (q *mpmcQueue[T]) Enqueue(value T) error {
 	spinCount := 0
 
-	for {
-		select {
-		case <-quit:
-			return nil
-		default:
-		}
+	if q.isClosed() {
+		return ErrQueueClosed
+	}
 
+	for {
 		_, tail, slot, diff := q.load(false)
 		if diff == 0 {
 			if atomic.CompareAndSwapUint64(&q.tail, tail, tail+1) {
@@ -134,7 +125,7 @@ func (q *mpmcQueue[T]) Enqueue(quit <-chan struct{}, value T) error {
 // Dequeue removes and returns an item from the queue
 // Returns ErrQueueClosed if queue is closed and empty
 // Blocks if context allows until item is available
-func (q *mpmcQueue[T]) Dequeue(ctx context.Context) (T, error) {
+func (q *mpmcQueue[T]) Dequeue() (T, error) {
 	var zero T
 	spinCount := 0
 
@@ -158,9 +149,7 @@ func (q *mpmcQueue[T]) Dequeue(ctx context.Context) (T, error) {
 		}
 
 		select {
-		case <-ctx.Done():
-			return zero, ctx.Err()
-		case <-q.closeC:
+		case <-q.close.Wait():
 			return zero, ErrQueueClosed
 		case <-q.notifyC:
 			spinCount = 0
@@ -190,8 +179,6 @@ func (q *mpmcQueue[T]) deque(head uint64, slot *mpmcQueueSlot[T]) (T, bool) {
 	if atomic.CompareAndSwapUint64(&q.head, head, head+1) {
 		value := slot.value
 		slot.value = zero
-		// Release the slot to producers
-		// if head is N, next sequence should be N + capacity
 		atomic.StoreUint64(&slot.sequence, head+q.mask+1)
 		return value, true
 	}
@@ -200,7 +187,7 @@ func (q *mpmcQueue[T]) deque(head uint64, slot *mpmcQueueSlot[T]) (T, bool) {
 
 // isClosed checks if the queue is closed and empty
 func (q *mpmcQueue[T]) isClosed() bool {
-	if q.closed.Load() {
+	if q.close.IsClosed() {
 		head := atomic.LoadUint64(&q.head)
 		tail := atomic.LoadUint64(&q.tail)
 		if head >= tail {
@@ -259,9 +246,7 @@ func (q *mpmcQueue[T]) IsBounded() bool {
 // Close marks the queue as closed
 // No new items can be enqueued after close
 func (q *mpmcQueue[T]) Close() {
-	if q.closed.CompareAndSwap(false, true) {
-		close(q.closeC)
-	}
+	q.close.Close()
 }
 
 // mpmc implements a lock-free multi-producer multi-consumer queue strategy.
@@ -269,19 +254,18 @@ func (q *mpmcQueue[T]) Close() {
 // This strategy is optimized for high-throughput scenarios where many goroutines
 // submit tasks concurrently to the pool.
 type mpmc[T any, R any] struct {
-	queue        *mpmcQueue[*types.SubmittedTask[T, R]]
-	conf         *ProcessorConfig[T, R]
-	quit         chan struct{}
-	shutdownOnce sync.Once
-	runner       *workerRunner[T, R]
+	queue   *mpmcQueue[*types.SubmittedTask[T, R]]
+	conf    *ProcessorConfig[T, R]
+	runner  *workerRunner[T, R]
+	quitter *workerSignal
 }
 
 // newMPMCStrategy creates a new MPMC queue strategy with the given configuration
 func newMPMCStrategy[T any, R any](conf *ProcessorConfig[T, R], bounded bool, capacity int) *mpmc[T, R] {
 	m := &mpmc[T, R]{
-		queue: newMPMCQueue[*types.SubmittedTask[T, R]](capacity, bounded),
-		conf:  conf,
-		quit:  make(chan struct{}),
+		queue:   newMPMCQueue[*types.SubmittedTask[T, R]](capacity, bounded),
+		conf:    conf,
+		quitter: newWorkerSignal(),
 	}
 	m.runner = newWorkerRunner(conf, m)
 	return m
@@ -289,14 +273,27 @@ func newMPMCStrategy[T any, R any](conf *ProcessorConfig[T, R], bounded bool, ca
 
 // Submit enqueues a task into the MPMC queue
 func (s *mpmc[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
-	return s.queue.Enqueue(s.quit, task)
+	if s.quitter.IsClosed() {
+		return ErrQueueClosed
+	}
+
+	return s.queue.Enqueue(task)
 }
 
 // SubmitBatch enqueues multiple tasks in batch for better performance
 func (s *mpmc[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
+	if s.quitter.IsClosed() {
+		return 0, ErrQueueClosed
+	}
+
 	for i, task := range tasks {
-		if err := s.queue.Enqueue(s.quit, task); err != nil {
-			return i, err
+		select {
+		case <-s.quitter.Wait():
+			return i, ErrQueueClosed
+		default:
+			if err := s.queue.Enqueue(task); err != nil {
+				return i, err
+			}
 		}
 	}
 	return len(tasks), nil
@@ -304,24 +301,12 @@ func (s *mpmc[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error
 
 // worker is the main worker loop that dequeues and executes tasks
 func (s *mpmc[T, R]) Worker(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
-	quitCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	drainFunc := func() {
 		s.drainQueue(ctx, executor, h)
 	}
 
-	go func() {
-		select {
-		case <-s.quit:
-			cancel()
-		case <-ctx.Done():
-			cancel()
-		}
-	}()
-
 	for {
-		task, err := s.queue.Dequeue(quitCtx)
+		task, err := s.queue.Dequeue()
 		if err != nil {
 			if err == ErrQueueClosed || err == context.Canceled {
 				drainFunc()
@@ -353,8 +338,6 @@ func (s *mpmc[T, R]) drainQueue(ctx context.Context, executor types.ProcessFunc[
 
 // Shutdown gracefully stops the workers and closes the queue
 func (s *mpmc[T, R]) Shutdown() {
-	s.shutdownOnce.Do(func() {
-		s.queue.Close()
-		close(s.quit)
-	})
+	s.quitter.Close()
+	s.queue.Close()
 }
