@@ -47,7 +47,6 @@ type StrategyResult struct {
 }
 
 var (
-	cyan = color.New(color.FgCyan)
 	bold = color.New(color.Bold)
 	red  = color.New(color.FgRed)
 )
@@ -199,19 +198,6 @@ func formatNumber(n int) string {
 		result += string(c)
 	}
 	return result
-}
-
-func printHeader() {
-	fmt.Println()
-	cyan.Println("╔════════════════════════════════════════════════════════════════════════╗")
-	cyan.Println("║                                                                        ║")
-	cyan.Println("║         🏆  ULTIMATE SCHEDULING STRATEGIES SHOWDOWN  🏆                ║")
-	cyan.Println("║                                                                        ║")
-	cyan.Println("║         Testing ALL strategies on the Billion Rows Challenge          ║")
-	cyan.Println("║         65+ Million temperature readings, variable workload            ║")
-	cyan.Println("║                                                                        ║")
-	cyan.Println("╚════════════════════════════════════════════════════════════════════════╝")
-	fmt.Println()
 }
 
 func runStrategy(strategyName string, stations []StationData, numWorkers int, bar *progressbar.ProgressBar) StrategyResult {
@@ -368,10 +354,8 @@ func printConfiguration(numWorkers int, totalRows int, totalSizeMB float64, numT
 func main() {
 	totalRowsFlag := flag.Int("rows", 65_000_000, "Total number of rows to process (e.g., 100000000 for 100M)")
 	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect, max 8)")
-	chunkSizeFlag := flag.Int("chunk", 50000, "Rows per task chunk (smaller = more tasks, default 50000)")
+	chunkSizeFlag := flag.Int("chunk", 500, "Rows per task chunk (smaller = more tasks, default 500)")
 	flag.Parse()
-
-	printHeader()
 
 	numWorkers := *workersFlag
 	if numWorkers == 0 {
@@ -393,7 +377,6 @@ func main() {
 		"Channel",
 		"Work-Stealing",
 		"MPMC Queue",
-		"LMAX Disruptor",
 		"Priority Queue",
 		"Skip List",
 		"Bitmask",
@@ -420,6 +403,7 @@ func main() {
 	)
 
 	for _, strategy := range strategies {
+		bar.Describe(fmt.Sprintf("Testing: %s", strategy))
 		result := runStrategy(strategy, tasks, numWorkers, bar)
 		results = append(results, result)
 		time.Sleep(time.Millisecond * 300)
