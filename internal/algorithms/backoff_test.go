@@ -74,7 +74,7 @@ func TestDecorrelatedJitterBackoff_Distribution(t *testing.T) {
 	delays := make([]time.Duration, 50)
 	for i := 0; i < 50; i++ {
 		djb := newDecorrelatedJitterBackoff(initialDelay, maxDelay)
-		djb.NextDelay(0, nil) // First attempt
+		djb.NextDelay(0, nil)             // First attempt
 		delays[i] = djb.NextDelay(1, nil) // Second attempt
 	}
 
