@@ -12,7 +12,7 @@ const (
 	initialSequence          = ^uint64(0) // -1 in uint64 representation
 	maxConsumerWaitSpins     = 100        // Max spins before yielding in waitForConsumer
 	lmxConsumerBatchSize     = 16         // Number of tasks a consumer tries to process in one go
-	defaultDisruptorCapacity = 1024       // defaultDisruptorCapacity is the default ring buffer capacity if not specified
+	defaultDisruptorCapacity = 16384      // defaultDisruptorCapacity is the default ring buffer capacity if not specified (increased for very large workloads like 100K+ tasks)
 )
 
 // lmaxSeq is a sequence counter with cache-line padding to prevent false sharing.
@@ -144,7 +144,6 @@ func (l *lmaxStrategy[T, R]) Submit(t *types.SubmittedTask[T, R]) error {
 
 func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
 	wrapSlot := nextSeq - uint64(l.capacity) // x - capacity
-	spinns := 0
 	for {
 		if l.quit.IsClosed() {
 			return context.Canceled
@@ -157,12 +156,9 @@ func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
 			if nextSeq < uint64(l.capacity) {
 				return nil
 			}
-			// Block if trying to wrap around before any consumer has processed tasks
-			spinns++
-			if spinns > maxConsumerWaitSpins {
-				spinns = 0
-				runtime.Gosched()
-			}
+			// Block spinning until consumers start and update gating
+			// With periodic gating updates in consume(), this will unblock quickly
+			runtime.Gosched()
 			continue
 		}
 
@@ -175,11 +171,7 @@ func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
 		if wrapSlot <= gating {
 			return nil
 		}
-		spinns++
-		if spinns > maxConsumerWaitSpins {
-			spinns = 0
-			runtime.Gosched()
-		}
+		runtime.Gosched()
 	}
 }
 
@@ -200,6 +192,7 @@ func (l *lmaxStrategy[T, R]) Shutdown() {
 
 func (l *lmaxStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
 	l.workerSeqs[workerID].set(initialSequence)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -309,6 +302,12 @@ func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, execut
 		}
 
 		l.workerSeqs[workerID].set(seq)
+
+		// Update gating sequence after first task and then every 4 tasks
+		// This unblocks producers quickly during initial startup and periodically after
+		if seq == nextSeq || (seq-nextSeq+1)%4 == 0 {
+			l.updateGatingSequence()
+		}
 	}
 
 	l.updateGatingSequence()
@@ -371,6 +370,7 @@ func (l *lmaxStrategy[T, R]) updateGatingSequence() {
 	}
 
 	// If no worker has claimed anything yet, keep gating at initialSequence
+	// This prevents premature updates before workers actually start consuming
 	if !initialized {
 		return
 	}

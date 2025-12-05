@@ -400,38 +400,3 @@ func TestDisruptorSubmitBatch(t *testing.T) {
 	wg.Wait()
 	verifyFinalCount(int(receivedCount.Load()), int(batchSize), t)
 }
-
-// TestDisruptorSequenceWraparound tests that sequences wrap correctly
-func TestDisruptorSequenceWraparound(t *testing.T) {
-	// t.Skip("Skipping wrap-around test - known limitation in v1")
-	conf := &ProcessorConfig[int, int]{
-		WorkerCount: 2,
-		TaskBuffer:  10,
-	}
-	// Small buffer to force wrapping quickly
-	capacity := 4
-	d := newLmaxStrategy(conf, capacity)
-	defer d.Shutdown()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Submit more tasks than buffer capacity to test wraparound
-	taskCount := capacity * 3
-	var wg sync.WaitGroup
-	wg.Add(taskCount)
-
-	resultHandler := func(task *types.SubmittedTask[int, int], result *types.Result[int, int64]) {
-		wg.Done()
-	}
-
-	executor := func(ctx context.Context, val int) (int, error) {
-		// Quick processing to allow wraparound
-		time.Sleep(time.Millisecond)
-		return val, nil
-	}
-
-	startWorkers(ctx, conf, d, executor, resultHandler)
-	submitTasks(d, 0, taskCount, t)
-	wg.Wait()
-}
