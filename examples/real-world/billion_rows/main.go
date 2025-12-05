@@ -200,6 +200,22 @@ func formatNumber(n int) string {
 	return result
 }
 
+// isCIMode detects if running in CI environment
+func isCIMode(ciFlag bool) bool {
+	if ciFlag {
+		return true
+	}
+
+	ciEnvVars := []string{"CI", "GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI", "JENKINS_HOME"}
+	for _, env := range ciEnvVars {
+		value := os.Getenv(env)
+		if value == "true" || value == "1" {
+			return true
+		}
+	}
+	return false
+}
+
 func runStrategy(strategyName string, stations []StationData, numWorkers int, bar *progressbar.ProgressBar) StrategyResult {
 	ctx := context.Background()
 
@@ -355,7 +371,12 @@ func main() {
 	totalRowsFlag := flag.Int("rows", 65_000_000, "Total number of rows to process (e.g., 100000000 for 100M)")
 	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect, max 8)")
 	chunkSizeFlag := flag.Int("chunk", 500, "Rows per task chunk (smaller = more tasks, default 500)")
+	ciModeFlag := flag.Bool("ci", false, "CI mode: disable progress bar and animations")
+	plainModeFlag := flag.Bool("plain", false, "Plain mode: disable colors and emojis")
 	flag.Parse()
+
+	ciMode := isCIMode(*ciModeFlag)
+	_ = *plainModeFlag // Reserved for future plain mode implementation
 
 	numWorkers := *workersFlag
 	if numWorkers == 0 {
@@ -388,26 +409,44 @@ func main() {
 	bold.Println("Running Benchmarks...")
 	fmt.Println()
 
-	bar := progressbar.NewOptions(len(strategies),
-		progressbar.OptionSetDescription("Testing strategies"),
-		progressbar.OptionSetWidth(50),
-		progressbar.OptionShowCount(),
-		progressbar.OptionShowIts(),
-		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "█",
-			SaucerHead:    "█",
-			SaucerPadding: "░",
-			BarStart:      "│",
-			BarEnd:        "│",
-		}),
-		progressbar.OptionEnableColorCodes(true),
-	)
+	var bar *progressbar.ProgressBar
+	if !ciMode {
+		bar = progressbar.NewOptions(len(strategies),
+			progressbar.OptionSetDescription("Testing strategies"),
+			progressbar.OptionSetWidth(50),
+			progressbar.OptionShowCount(),
+			progressbar.OptionShowIts(),
+			progressbar.OptionSetTheme(progressbar.Theme{
+				Saucer:        "█",
+				SaucerHead:    "█",
+				SaucerPadding: "░",
+				BarStart:      "│",
+				BarEnd:        "│",
+			}),
+			progressbar.OptionEnableColorCodes(true),
+		)
+	}
 
-	for _, strategy := range strategies {
-		bar.Describe(fmt.Sprintf("Testing: %s", strategy))
+	for i, strategy := range strategies {
+		if ciMode {
+			fmt.Printf("[%d/%d] Testing strategy: %s\n", i+1, len(strategies), strategy)
+		}
+		if bar != nil {
+			bar.Describe(fmt.Sprintf("Testing: %s", strategy))
+		}
 		result := runStrategy(strategy, tasks, numWorkers, bar)
 		results = append(results, result)
-		time.Sleep(time.Millisecond * 300)
+
+		if !ciMode {
+			time.Sleep(time.Millisecond * 300)
+		}
+
+		if ciMode {
+			fmt.Printf("✓ %s completed in %v (%.1f M rows/s)\n",
+				strategy,
+				result.TotalTime.Round(time.Millisecond),
+				result.ThroughputRowsPS/1_000_000)
+		}
 	}
 
 	fmt.Println()
