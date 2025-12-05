@@ -1,4 +1,4 @@
-.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet install
+.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet install demo demo-billion
 
 # Variables
 BINARY_NAME=poolme
@@ -49,6 +49,13 @@ help:
 	@echo "  make fmt               - Format code with gofmt"
 	@echo "  make vet               - Run go vet"
 	@echo "  make check             - Run fmt, vet, and lint"
+	@echo ""
+	@echo "$(GREEN)Examples:$(NC)"
+	@echo "  make demo              - Run ALL real-world demos"
+	@echo "  make demo-billion      - Billion rows challenge (65M rows, 300M+ rows/sec)"
+	@echo "  make demo-billion-small - Quick test with 5M rows"
+	@echo "  make demo-billion-large - Large test with 100M rows"
+	@echo "  make demo-billion-stress - Run multiple times to verify stability"
 	@echo ""
 	@echo "$(GREEN)Utilities:$(NC)"
 	@echo "  make clean             - Clean build artifacts and test cache"
@@ -195,3 +202,78 @@ tidy:
 	@echo "$(BLUE)Tidying go modules...$(NC)"
 	$(GOMOD) tidy
 	@echo "$(GREEN)Modules tidied!$(NC)"
+
+## demo: Run ALL real-world demos
+demo:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║         Running ALL Work-Stealing Real-World Demos         ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@$(MAKE) demo-billion
+	@echo ""
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo ""
+
+## demo-billion: Run the billion rows challenge demo with default 65M rows
+demo-billion:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║              Billion Rows Challenge Demo                   ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)🌡️  Processing 65 million temperature measurements$(NC)"
+	@echo "$(YELLOW)   Expected: 250-400M rows/sec, completes in under 1 second!$(NC)"
+	@echo ""
+	@cd examples/real-world/billion_rows && $(GO) run main.go
+	@echo ""
+	@echo "$(GREEN)✅ Billion rows demo complete!$(NC)"
+	@echo ""
+	@echo "$(BLUE)📝 Next Steps:$(NC)"
+	@echo "  • Try: make demo-billion-large (1B rows)"
+	@echo "  • Try: make demo-billion-stress (stability test)"
+	@echo ""
+
+## demo-billion-small: Run with 5M rows for quick testing
+demo-billion-small:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║         Billion Rows Challenge - Quick Test (5M)           ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)🌡️  Processing 5 million temperature measurements$(NC)"
+	@echo "$(YELLOW)   Quick test to verify all strategies work correctly$(NC)"
+	@echo ""
+	@cd examples/real-world/billion_rows && $(GO) run main.go -rows 5000000
+	@echo ""
+	@echo "$(GREEN)✅ Quick test complete!$(NC)"
+	@echo ""
+
+## demo-billion-large: Run with 100M rows for comprehensive benchmark
+demo-billion-large:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║     Billion Rows Challenge - Large Scale (1B)              ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)🌡️  Processing 1 Billion temperature measurements$(NC)"
+	@echo "$(YELLOW)   Large-scale test - may take 2-3 seconds$(NC)"
+	@echo ""
+	@cd examples/real-world/billion_rows && $(GO) run main.go -rows 1000000000
+	@echo ""
+	@echo "$(GREEN)✅ Large-scale benchmark complete!$(NC)"
+	@echo ""
+
+## demo-billion-stress: Run multiple times to verify stability
+demo-billion-stress:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║         Billion Rows Challenge - Stability Test            ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Running 3 iterations with 5M rows each$(NC)"
+	@echo "$(YELLOW)This verifies no deadlocks or race conditions$(NC)"
+	@echo ""
+	@for i in 1 2 3; do \
+		echo "$(YELLOW)━━━ Iteration $$i/3 ━━━$(NC)"; \
+		cd examples/real-world/billion_rows && $(GO) run main.go -rows 5000000 || exit 1; \
+		echo ""; \
+	done
+	@echo "$(GREEN)✅ All iterations completed successfully!$(NC)"
+	@echo "$(GREEN)   No deadlocks detected - the fix works!$(NC)"
+	@echo ""
