@@ -377,6 +377,7 @@ func main() {
 		"Channel",
 		"Work-Stealing",
 		"MPMC Queue",
+		"LMAX Disruptor",
 		"Priority Queue",
 		"Skip List",
 		"Bitmask",
