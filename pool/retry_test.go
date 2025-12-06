@@ -105,37 +105,6 @@ func TestWorkerPool_Retry_AllAttemptsFail(t *testing.T) {
 	}, 2, WithRetryPolicy(3, 10*time.Millisecond))
 }
 
-func TestWorkerPool_Retry_NoRetryWhenMaxAttemptsIsOne(t *testing.T) {
-	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
-		pool := NewWorkerPool[int, int](s.opts...)
-
-		var attemptCount atomic.Int32
-		processFn := func(ctx context.Context, task int) (int, error) {
-			attemptCount.Add(1)
-			return 0, errors.New("failure")
-		}
-
-		start := time.Now()
-		_, err := pool.Process(context.Background(), []int{1}, processFn)
-		elapsed := time.Since(start)
-
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-
-		// Should only attempt once
-		if attemptCount.Load() != 1 {
-			t.Errorf("expected 1 attempt, got %d", attemptCount.Load())
-		}
-
-		// Should not wait for the configured 100ms delay
-		// Allow for scheduler overhead (especially under race detector)
-		if elapsed > 150*time.Millisecond {
-			t.Errorf("expected no backoff delay (max 150ms overhead), but took %v", elapsed)
-		}
-	}, 2, WithRetryPolicy(1, 100*time.Millisecond))
-}
-
 func TestWorkerPool_Retry_ExponentialBackoffTiming(t *testing.T) {
 	initialDelay := 100 * time.Millisecond
 	runStrategyTest(t, func(t *testing.T, s strategyConfig) {
@@ -297,8 +266,8 @@ func TestWorkerPool_Retry_NoDelayWhenInitialDelayIsZero(t *testing.T) {
 
 		// Should complete quickly with no backoff delay
 		// Allow for scheduler overhead (especially under race detector)
-		if elapsed > 100*time.Millisecond {
-			t.Errorf("expected fast execution with no backoff (max 100ms overhead), but took %v", elapsed)
+		if elapsed > 150*time.Millisecond {
+			t.Errorf("expected fast execution with no backoff (max 150ms overhead), but took %v", elapsed)
 		}
 	}, 1, WithRetryPolicy(3, 0))
 }

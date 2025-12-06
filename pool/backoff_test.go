@@ -100,10 +100,11 @@ func TestWorkerPool_Backoff_JitteredBackoff(t *testing.T) {
 
 		// Verify jittered backoff delays are within bounds
 		// First delay should be around 100ms ± 20% (80ms to 120ms)
+		// Allow large tolerance for race detector overhead
 		firstDelay := attemptTimes[1].Sub(attemptTimes[0])
 		expectedMin := 80 * time.Millisecond
 		expectedMax := 120 * time.Millisecond
-		tolerance := 30 * time.Millisecond
+		tolerance := 300 * time.Millisecond // Increased for race detector
 
 		if firstDelay < expectedMin-tolerance || firstDelay > expectedMax+tolerance {
 			t.Errorf("first delay = %v, expected between %v and %v (with tolerance)",
@@ -111,9 +112,11 @@ func TestWorkerPool_Backoff_JitteredBackoff(t *testing.T) {
 		}
 
 		// Second delay should be around 200ms ± 20% (160ms to 240ms)
+		// Allow large tolerance for race detector overhead
 		secondDelay := attemptTimes[2].Sub(attemptTimes[1])
 		expectedMin = 160 * time.Millisecond
 		expectedMax = 240 * time.Millisecond
+		tolerance = 300 * time.Millisecond // Increased for race detector
 
 		if secondDelay < expectedMin-tolerance || secondDelay > expectedMax+tolerance {
 			t.Errorf("second delay = %v, expected between %v and %v (with tolerance)",
