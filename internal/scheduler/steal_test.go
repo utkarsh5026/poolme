@@ -948,7 +948,7 @@ func TestWorkSteal_Drain(t *testing.T) {
 
 	for i := range numGlobalTasks {
 		task := types.NewSubmittedTask[int, int](i+100, int64(i+100), nil)
-		s.globalQueue.PushBack(task)
+		_ = s.globalQueue.Enqueue(task)
 	}
 
 	// Call drain

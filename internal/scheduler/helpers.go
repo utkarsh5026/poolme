@@ -41,6 +41,7 @@ type workerSignal struct {
 	sig    chan signal // Channel for sending and receiving availability signals
 	closed atomic.Bool // Atomic flag indicating whether the channel is closed
 	once   sync.Once   // Ensures the channel is closed exactly once
+	mu     sync.Mutex  // Protects against race between Signal() and Close()
 }
 
 // newWorkerSignal creates a new workerSignal instance with a buffered signal channel.
@@ -57,8 +58,10 @@ func newWorkerSignal() *workerSignal {
 // After closing, Signal() calls will be no-ops and Wait() will return a closed channel.
 func (ws *workerSignal) Close() {
 	ws.once.Do(func() {
+		ws.mu.Lock()
 		ws.closed.Store(true)
 		close(ws.sig)
+		ws.mu.Unlock()
 	})
 }
 
@@ -73,6 +76,9 @@ func (ws *workerSignal) IsClosed() bool {
 // This is useful for notifying listeners that a worker has become available
 // without blocking the signaling goroutine.
 func (ws *workerSignal) Signal() {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
 	if ws.IsClosed() {
 		return
 	}

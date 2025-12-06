@@ -1,3 +1,37 @@
+// Package scheduler provides various scheduling strategies for worker pool task distribution.
+//
+// This file implements the LMAX Disruptor pattern, a high-performance inter-thread
+// messaging library designed by LMAX Exchange. The Disruptor achieves exceptional
+// throughput by eliminating locks through careful memory layout and atomic operations.
+//
+// Key Design Principles:
+//   - Lock-free coordination using atomic Compare-And-Swap (CAS) operations
+//   - Cache-line padding to prevent false sharing between CPU cores
+//   - Pre-allocated ring buffer for zero-allocation task submission
+//   - Sequence-based coordination instead of traditional locks
+//   - Batched consumption for improved throughput
+//
+// Architecture Overview:
+//
+//	                ┌─────────────────────────────────┐
+//	                │         Ring Buffer             │
+//	                │  [slot0][slot1][slot2]...[slotN]│
+//	                └─────────────────────────────────┘
+//	                       ▲                   │
+//	                       │                   ▼
+//	┌──────────┐     ┌─────┴─────┐     ┌──────────────┐
+//	│ Producer │────▶│   Tail    │     │  Consumers   │
+//	│  (CAS)   │     │ Sequence  │     │ (workerSeqs) │
+//	└──────────┘     └───────────┘     └──────────────┘
+//	                       ▲                   │
+//	                       │                   ▼
+//	                ┌──────┴──────────────────────┐
+//	                │      Gating Sequence        │
+//	                │  (prevents ring wrap-around)│
+//	                └─────────────────────────────┘
+//
+// For more details on the LMAX Disruptor pattern, see:
+// https://lmax-exchange.github.io/disruptor/
 package scheduler
 
 import (
@@ -9,76 +43,125 @@ import (
 )
 
 const (
-	initialSequence          = ^uint64(0) // -1 in uint64 representation
-	maxConsumerWaitSpins     = 100        // Max spins before yielding in waitForConsumer
-	lmxConsumerBatchSize     = 16         // Number of tasks a consumer tries to process in one go
-	defaultDisruptorCapacity = 16384      // defaultDisruptorCapacity is the default ring buffer capacity if not specified (increased for very large workloads like 100K+ tasks)
+	// initialSequence represents the initial state of sequence counters.
+	// Using max uint64 (equivalent to -1 in two's complement) allows the first
+	// valid sequence to be 0 after incrementing.
+	initialSequence = ^uint64(0)
+
+	// maxConsumerWaitSpins defines the maximum number of spin iterations before
+	// yielding the processor. This balances CPU usage against latency - spinning
+	// is faster for short waits, but yielding is more efficient for longer waits.
+	maxConsumerWaitSpins = 100
+
+	// lmxConsumerBatchSize determines how many tasks a consumer attempts to claim
+	// and process in a single batch. Larger batches improve throughput by reducing
+	// CAS contention, but may increase latency for individual tasks.
+	lmxConsumerBatchSize = 16
+
+	// defaultDisruptorCapacity is the default ring buffer size when not specified.
+	// Set to 16384 (2^14) to handle large workloads efficiently. Must be a power
+	// of 2 to enable fast modulo operations via bitwise AND.
+	defaultDisruptorCapacity = 16384
 )
 
-// lmaxSeq is a sequence counter with cache-line padding to prevent false sharing.
-// The padding ensures that each sequence counter occupies its own cache line, eliminating
-// false sharing between concurrent goroutines accessing different sequences.
+// lmaxSeq is a cache-line padded sequence counter for lock-free coordination.
+//
+// In concurrent systems, false sharing occurs when multiple CPU cores access
+// different variables that happen to reside on the same cache line. When one
+// core modifies its variable, the entire cache line is invalidated on all other
+// cores, causing expensive cache coherency traffic.
+//
+// By padding the sequence value to occupy a full cache line (typically 64 bytes),
+// we ensure that each sequence counter is isolated, allowing concurrent access
+// from multiple goroutines without cache line bouncing.
+//
+// Memory Layout:
+//
+//	┌────────────────────────────────────────────────────────────────┐
+//	│ [padding: 64 bytes] │ value: 8 bytes │ [padding: 56 bytes]     │
+//	└────────────────────────────────────────────────────────────────┘
+//	                      ◄─────── isolated cache line ───────►
 type lmaxSeq struct {
-	_     [cacheLinePadding]byte     // Padding before value
-	value uint64                     // The actual sequence value
-	_     [cacheLinePadding - 8]byte // Padding after value (assuming uint64 is 8 bytes)
+	_     [cacheLinePadding]byte
+	value uint64 // The actual sequence value (8 bytes)
+	_     [cacheLinePadding - 8]byte
 }
 
 // get atomically loads and returns the current sequence value.
+// Uses acquire semantics to ensure visibility of data published before this sequence.
 func (s *lmaxSeq) get() uint64 {
 	return atomic.LoadUint64(&s.value)
 }
 
 // set atomically stores the given value to the sequence.
+// Uses release semantics to ensure all prior writes are visible to consumers.
 func (s *lmaxSeq) set(val uint64) {
 	atomic.StoreUint64(&s.value, val)
 }
 
-// cas atomically compares the sequence value with old and sets it to new if they match.
-// Returns true if the swap was successful, false otherwise.
+// cas performs an atomic Compare-And-Swap operation on the sequence.
 func (s *lmaxSeq) cas(old, new uint64) bool {
 	return atomic.CompareAndSwapUint64(&s.value, old, new)
 }
 
-// disruptorSlot represents a single slot in the Disruptor ring buffer.
-// Each slot stores a task and its sequence number for coordination.
-// Cache-line padding prevents false sharing between adjacent slots.
+// lmaxSlot represents a single entry in the Disruptor ring buffer.
+//
+// Each slot contains:
+//   - A sequence number that indicates the "version" of data in this slot
+//   - A pointer to the submitted task
 type lmaxSlot[T any, R any] struct {
-	sequence uint64 // Sequence number for this slot (used for coordination)
+	sequence uint64
 	task     *types.SubmittedTask[T, R]
-	_        [cacheLinePadding - 16]byte // Padding (assumes pointer + uint64 = 16 bytes)
+	_        [cacheLinePadding - 16]byte // Padding to fill cache line (8 bytes seq + 8 bytes pointer = 16 bytes)
 }
 
-// disruptor implements the LMAX Disruptor scheduling strategy.
+// lmaxStrategy implements the LMAX Disruptor scheduling pattern.
 //
-// The Disruptor uses a pre-allocated ring buffer with lock-free sequence-based coordination.
-// Key features:
-// - Pre-allocated ring buffer (power-of-2 size for fast modulo)
-// - Per-worker sequence tracking (unlike MPMC's single head counter)
-// - Gating sequence to prevent ring wrap-around
-// - Atomic CAS operations for lock-free coordination
-// - Cache-line padding to prevent false sharing
+// The Disruptor is a high-performance, lock-free data structure for inter-thread
+// messaging. Originally developed by LMAX Exchange for their financial trading platform,
+// it achieves throughput of millions of operations per second with predictable latency.
 type lmaxStrategy[T any, R any] struct {
+	// ring is the pre-allocated circular buffer holding task slots.
+	// Size is always a power of 2 for efficient index calculation.
 	ring []lmaxSlot[T, R]
-	mask uint64 // Capacity - 1, for fast modulo via bitwise AND
 
-	// Sequence tracking (with cache-line padding between them)
-	tail        lmaxSeq   // Next sequence to be published by producers
-	consumerSeq lmaxSeq   // Shared consumer sequence for claiming (consumers compete via CAS)
-	gatingSeq   lmaxSeq   // Slowest consumer's sequence (gates producers)
-	workerSeqs  []lmaxSeq // Per-worker consumer sequences (for tracking progress)
+	// mask is (capacity - 1), used for fast modulo: index = seq & mask
+	// Example: capacity=16, mask=15 (0b1111), seq=17 → index = 17 & 15 = 1
+	mask uint64
 
-	conf     *ProcessorConfig[T, R]
-	capacity int
+	// Sequence Tracking
+	// -----------------
+	// All sequences are cache-line padded to prevent false sharing.
 
-	quit   *workerSignal
-	runner *workerRunner[T, R]
+	// tail tracks the next sequence to be claimed by producers.
+	// Producers CAS this value to reserve their slot.
+	tail lmaxSeq
+
+	// consumerSeq is the shared claiming sequence for consumers.
+	// Workers CAS this to claim batches of work, enabling parallel consumption.
+	consumerSeq lmaxSeq
+
+	// gatingSeq tracks the slowest consumer's progress.
+	// Producers wait when (tail - gatingSeq) >= capacity to prevent overwrites.
+	gatingSeq lmaxSeq
+
+	// workerSeqs tracks each worker's individual progress.
+	// Used to calculate gatingSeq (minimum across all workers).
+	workerSeqs []lmaxSeq
+
+	// Configuration and lifecycle
+	conf     *ProcessorConfig[T, R] // Processor configuration
+	capacity int                    // Ring buffer capacity (power of 2)
+
+	quit   *workerSignal       // Shutdown signal
+	runner *workerRunner[T, R] // Task execution helper
 }
 
-// newDisruptorStrategy creates a new Disruptor scheduling strategy.
+// newLmaxStrategy creates and initializes a new LMAX Disruptor scheduling strategy.
 //
-// The capacity will be rounded up to the next power of 2 for efficient modulo operations.
-// Worker sequences are initialized to -1, and the ring buffer slots are pre-allocated.
+// Parameters:
+//   - conf: Processor configuration including worker count and execution settings
+//   - capacity: Desired ring buffer size (will be rounded up to next power of 2)
 func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *lmaxStrategy[T, R] {
 	if capacity <= 0 {
 		capacity = defaultDisruptorCapacity
@@ -91,7 +174,9 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 	// This ensures slots are not considered "published" until a producer explicitly publishes them
 	// For example, with capacity 16: slot[0].sequence = -16, slot[1].sequence = -15, etc.
 	for i := range ring {
-		ring[i].sequence = uint64(i - capacity) // #nosec G115 -- intentional wraparound for initial state
+		// Use intentional wraparound: uint64(i) will be less than uint64(capacity) for valid indices,
+		// so the subtraction wraps around correctly in unsigned arithmetic
+		ring[i].sequence = uint64(i) - uint64(capacity)
 	}
 
 	// Create per-worker sequences (initialized to -1 means no slots claimed yet)
@@ -118,6 +203,12 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 	return l
 }
 
+// Submit adds a single task to the ring buffer for processing.
+//
+// The submission process follows a two-phase protocol:
+// Submit reserves the next slot by CAS on tail,
+// blocks if ring is full, then publishes task and sequence.
+// Returns ErrSchedulerClosed if shutting down or blocks if full.
 func (l *lmaxStrategy[T, R]) Submit(t *types.SubmittedTask[T, R]) error {
 	if l.quit.IsClosed() {
 		return ErrSchedulerClosed
@@ -142,8 +233,13 @@ func (l *lmaxStrategy[T, R]) Submit(t *types.SubmittedTask[T, R]) error {
 	return nil
 }
 
+// waitForConsumer implements producer back-pressure by blocking until it's safe to write.
+//
+// The ring buffer has fixed capacity. If producers write faster than consumers read,
+// eventually a producer would need to write to a slot that still contains unconsumed
+// data. This function prevents that by blocking until consumers have advanced.
 func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
-	wrapSlot := nextSeq - uint64(l.capacity) // x - capacity
+	wrapSlot := nextSeq - uint64(l.capacity)
 	for {
 		if l.quit.IsClosed() {
 			return context.Canceled
@@ -175,6 +271,19 @@ func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
 	}
 }
 
+// SubmitBatch submits multiple tasks to the ring buffer sequentially.
+//
+// Each task is submitted individually via Submit(). This approach:
+//   - Maintains FIFO ordering of tasks
+//   - Applies back-pressure per-task (may block between submissions)
+//   - Returns partial success count if an error occurs mid-batch
+//
+// Returns the number of successfully submitted tasks and any error encountered.
+// On error, (n, err) indicates n tasks were submitted before the failure.
+//
+// Note: This implementation doesn't claim sequences in bulk, which would be
+// more efficient but more complex. For high-throughput bulk submission,
+// consider using Submit in a goroutine pool or the batch-optimized MPMC strategy.
 func (l *lmaxStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
 	n := 0
 	for _, t := range tasks {
@@ -186,21 +295,26 @@ func (l *lmaxStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (in
 	return n, nil
 }
 
+// Shutdown initiates graceful shutdown of the strategy.
 func (l *lmaxStrategy[T, R]) Shutdown() {
 	l.quit.Close()
 }
 
+// Worker runs the consumer loop for a single worker goroutine.
 func (l *lmaxStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
 	l.workerSeqs[workerID].set(initialSequence)
+	drainFunc := func(all bool) {
+		l.drain(ctx, workerID, executor, h, all)
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			l.drain(ctx, workerID, executor, h, true)
+			drainFunc(true)
 			return ctx.Err()
 
 		case <-l.quit.Wait():
-			l.drain(ctx, workerID, executor, h, false)
+			drainFunc(false)
 			return nil
 
 		default:
@@ -212,100 +326,89 @@ func (l *lmaxStrategy[T, R]) Worker(ctx context.Context, workerID int64, executo
 	}
 }
 
+// drain processes remaining tasks during shutdown or context cancellation.
+//
+// This method ensures graceful handling of in-flight tasks:
+//
+// The drain process uses the same batching logic as normal consumption,
+// claiming sequences via CAS to coordinate with other draining workers.
 func (l *lmaxStrategy[T, R]) drain(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R], processAll bool) {
-	// Keep processing tasks until we've caught up with the producer
-	// If processAll is false (shutdown scenario), only process immediately available tasks
 	for {
-		producer := l.tail.get()
-		consmer := l.consumerSeq.get()
-
-		// No more tasks to drain
-		if (consmer == initialSequence && producer == initialSequence) ||
-			(consmer != initialSequence && consmer >= producer) {
-			debugLog("drain complete: consmer=%d, producer=%d", consmer, producer)
-			return
-		}
-
-		// Try to claim a batch
-		nextSeq := consmer + 1
-		potentialEnd := min(nextSeq+uint64(lmxConsumerBatchSize)-1, producer)
-
-		if !l.consumerSeq.cas(consmer, potentialEnd) {
-			runtime.Gosched()
+		nextSeq, end, ok := l.resolveSeq()
+		if !ok {
+			if nextSeq == initialSequence {
+				return
+			}
 			continue
 		}
 
 		// Process claimed tasks
-		for seq := nextSeq; seq <= potentialEnd; seq++ {
-			slot := l.getSlot(seq)
-			// Check if task is already published
+		for seq := nextSeq; seq <= end; seq++ {
+			slot := &l.ring[seq&l.mask]
 			if atomic.LoadUint64(&slot.sequence) != seq {
-				// Task not published yet
 				if processAll {
-					// Context cancelled - skip unpublished tasks
-					debugLog("drain skipping unpublished task: seq=%d", seq)
 					l.workerSeqs[workerID].set(seq)
 					continue
 				} else {
-					// Shutdown - don't wait for unpublished tasks, exit early
-					debugLog("drain exiting early due to unpublished task: seq=%d", seq)
-					l.workerSeqs[workerID].set(seq - 1) // Set to last completed
+					l.workerSeqs[workerID].set(seq - 1)
 					l.updateGatingSequence()
 					return
 				}
 			}
 
-			task := slot.task
-			if task != nil {
-				_ = l.runner.Execute(ctx, task, executor, h, nil)
-				debugLog("drain processed task: seq=%d", seq)
+			if slot.task != nil {
+				_ = l.runner.Execute(ctx, slot.task, executor, h, nil)
 			}
 			l.workerSeqs[workerID].set(seq)
 		}
 
 		l.updateGatingSequence()
-
-		// If not processing all tasks (shutdown), exit after one batch
 		if !processAll {
 			return
 		}
 	}
 }
 
-func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
+func (l *lmaxStrategy[T, R]) resolveSeq() (start, end uint64, correct bool) {
 	producer := l.tail.get()
 	consmer := l.consumerSeq.get()
 
 	if (consmer == initialSequence && producer == initialSequence) ||
 		(consmer != initialSequence && consmer >= producer) {
-		debugLog("consumer is greedy: consmer=%d, producer=%d", consmer, producer)
+		return initialSequence, 0, false
+	}
+
+	start = consmer + 1
+	end = min(start+uint64(lmxConsumerBatchSize)-1, producer)
+
+	if !l.consumerSeq.cas(consmer, end) {
 		runtime.Gosched()
+		return start, end, false
+	}
+
+	return start, end, true
+}
+
+// consume claims and processes a batch of tasks from the ring buffer.
+// This is the core consumption loop implementing batched processing:
+func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
+	start, end, ok := l.resolveSeq()
+	if !ok {
 		return nil
 	}
 
-	nextSeq := consmer + 1
-	potentialEnd := min(nextSeq+uint64(lmxConsumerBatchSize)-1, producer)
-
-	if !l.consumerSeq.cas(consmer, potentialEnd) {
-		runtime.Gosched()
-		return nil
-	}
-
-	for seq := nextSeq; seq <= potentialEnd; seq++ {
-		if err := l.waitForProducer(ctx, seq); err != nil {
+	for i := start; i <= end; i++ {
+		if err := l.waitForProducer(ctx, i); err != nil {
 			return err
 		}
 
-		task := l.ring[seq&l.mask].task
-		if err := l.runner.Execute(ctx, task, executor, h, nil); err != nil {
+		slot := l.ring[i&l.mask]
+		if err := l.runner.Execute(ctx, slot.task, executor, h, nil); err != nil {
 			return err
 		}
 
-		l.workerSeqs[workerID].set(seq)
-
-		// Update gating sequence after first task and then every 4 tasks
-		// This unblocks producers quickly during initial startup and periodically after
-		if seq == nextSeq || (seq-nextSeq+1)%4 == 0 {
+		l.workerSeqs[workerID].set(i)
+		if i == start || (i-start+1)%4 == 0 {
 			l.updateGatingSequence()
 		}
 	}
@@ -314,24 +417,24 @@ func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, execut
 	return nil
 }
 
+// waitForProducer spins until the producer publishes data to the claimed slot.
+//
+// In the Disruptor pattern, consumers may claim a sequence before the producer
+// has finished writing to it. This method bridges that gap by waiting for the
+// producer to signal completion via the slot's sequence number.
 func (l *lmaxStrategy[T, R]) waitForProducer(ctx context.Context, seq uint64) error {
-	slot := l.getSlot(seq)
+	slot := &l.ring[seq&l.mask]
 	spins := 0
 
 	for {
-		// Check if task is already available first
 		if atomic.LoadUint64(&slot.sequence) == seq {
 			return nil
 		}
 
-		// If shutting down and task is not ready yet, don't wait for it
-		// This prevents workers from waiting indefinitely for tasks that may never arrive
 		if l.quit.IsClosed() {
 			return ErrSchedulerClosed
 		}
 
-		// Only check context cancellation if we need to wait
-		// This allows processing already-published tasks even if context is cancelled
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -346,20 +449,23 @@ func (l *lmaxStrategy[T, R]) waitForProducer(ctx context.Context, seq uint64) er
 	}
 }
 
+// updateGatingSequence recalculates and updates the gating sequence.
+//
+// The gating sequence is the minimum progress across all workers. It serves
+// as the back-pressure mechanism: producers cannot write to slots where
+// sequence > gatingSeq + capacity (would overwrite unconsumed data).
 func (l *lmaxStrategy[T, R]) updateGatingSequence() {
 	if len(l.workerSeqs) == 0 {
 		return
 	}
 
-	// Find minimum sequence among workers that have claimed sequences
-	// Skip workers still at initialSequence to avoid blocking progress
 	minSeq := uint64(0)
 	initialized := false
 
 	for i := 0; i < len(l.workerSeqs); i++ {
 		seq := l.workerSeqs[i].get()
 		if seq == initialSequence {
-			continue // Skip workers that haven't claimed any sequences yet
+			continue
 		}
 		if !initialized {
 			minSeq = seq
@@ -377,20 +483,13 @@ func (l *lmaxStrategy[T, R]) updateGatingSequence() {
 
 	for {
 		old := l.gatingSeq.get()
-		// Special case: if gatingSeq is at initial state, always try to update it.
-		// Otherwise, only update if minSeq has advanced beyond old.
 		if old == initialSequence || minSeq > old {
 			if l.gatingSeq.cas(old, minSeq) {
-				break
+				return
 			}
 		} else {
 			// minSeq <= old and old != initialSequence, gating is already ahead
-			break
+			return
 		}
 	}
-}
-
-func (l *lmaxStrategy[T, R]) getSlot(seq uint64) *lmaxSlot[T, R] {
-	idx := seq & l.mask
-	return &l.ring[idx]
 }
