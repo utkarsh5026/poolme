@@ -174,7 +174,9 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 	// This ensures slots are not considered "published" until a producer explicitly publishes them
 	// For example, with capacity 16: slot[0].sequence = -16, slot[1].sequence = -15, etc.
 	for i := range ring {
-		ring[i].sequence = uint64(i - capacity) // #nosec G115 -- intentional wraparound for initial state
+		// Use intentional wraparound: uint64(i) will be less than uint64(capacity) for valid indices,
+		// so the subtraction wraps around correctly in unsigned arithmetic
+		ring[i].sequence = uint64(i) - uint64(capacity)
 	}
 
 	// Create per-worker sequences (initialized to -1 means no slots claimed yet)
