@@ -138,7 +138,6 @@ func generateBalancedStationData(totalRows int, chunkSize int) []StationData {
 			continue
 		}
 
-		// Round-robin station assignment for perfect distribution
 		stationName := stationNames[stationIdx%len(stationNames)]
 		stationIdx++
 
@@ -527,10 +526,16 @@ func makeProgressBar(strategies []string) *progressbar.ProgressBar {
 			BarEnd:        "│",
 		}),
 		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionSetWriter(os.Stderr),          // Use stderr for better terminal support
+		progressbar.OptionThrottle(65*time.Millisecond), // Reduce update frequency
+		progressbar.OptionClearOnFinish(),               // Clear progress bar when done
 	)
 }
 
 func main() {
+	// Enable ANSI escape sequences on Windows for progress bar support
+	enableWindowsANSI()
+
 	totalRowsFlag := flag.Int("rows", 65_000_000, "Total number of rows to process (e.g., 100000000 for 100M)")
 	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect, max 8)")
 	chunkSizeFlag := flag.Int("chunk", 500, "Rows per task chunk (smaller = more tasks, default 500)")
