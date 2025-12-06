@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
+	"slices"
 	"sort"
 	"time"
 
@@ -15,6 +16,18 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"github.com/schollz/progressbar/v3"
 	"github.com/utkarsh5026/poolme/pool"
+)
+
+var (
+	allStrategies = []string{
+		"Channel",
+		"Work-Stealing",
+		"MPMC Queue",
+		"LMAX Disruptor",
+		"Priority Queue",
+		"Skip List",
+		"Bitmask",
+	}
 )
 
 // StationData represents a weather station's measurement batch (or chunk)
@@ -96,6 +109,50 @@ func hashString(s string) int64 {
 		hash = hash*31 + int64(c)
 	}
 	return hash
+}
+
+// generateBalancedStationData creates uniform-sized chunks for all stations.
+// This creates a perfectly balanced workload where all tasks have the same size,
+// reducing the impact of workload imbalance on scheduler performance.
+//
+// chunkSize: Rows per task (all tasks will have this size except possibly the last)
+func generateBalancedStationData(totalRows int, chunkSize int) []StationData {
+	tasks := make([]StationData, 0)
+	stationNames := []string{
+		"Beijing", "Tokyo", "Delhi", "Shanghai", "Mumbai", "Cairo", "Moscow",
+		"London", "Paris", "Berlin", "Rome", "Madrid", "Amsterdam", "Brussels",
+		"Vienna", "Oslo", "Helsinki", "Stockholm", "Copenhagen", "Dublin",
+		"Lisbon", "Athens", "Warsaw", "Prague", "Budapest", "Reykjavik",
+		"Luxembourg", "Monaco", "Vaduz", "Andorra",
+	}
+
+	numChunks := (totalRows + chunkSize - 1) / chunkSize
+	stationIdx := 0
+
+	for chunkID := range numChunks {
+		startIdx := chunkID * chunkSize
+		endIdx := min((chunkID+1)*chunkSize, totalRows)
+		chunkRows := endIdx - startIdx
+
+		if chunkRows <= 0 {
+			continue
+		}
+
+		// Round-robin station assignment for perfect distribution
+		stationName := stationNames[stationIdx%len(stationNames)]
+		stationIdx++
+
+		tasks = append(tasks, StationData{
+			StationName: stationName,
+			ChunkID:     chunkID,
+			NumReadings: chunkRows,
+			SizeMB:      float64(chunkRows) * 0.000026, // ~26 bytes per row
+			Complexity:  "Uniform",
+			StartIndex:  startIdx,
+		})
+	}
+
+	return tasks
 }
 
 // generateStationData creates chunked station data for true parallel testing.
@@ -298,6 +355,68 @@ func runStrategy(strategyName string, stations []StationData, numWorkers int, ba
 	}
 }
 
+// calculateStats computes median time from multiple iterations
+func calculateStats(strategyName string, results []StrategyResult) StrategyResult {
+	if len(results) == 0 {
+		return StrategyResult{Name: strategyName}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].TotalTime < results[j].TotalTime
+	})
+
+	medianIdx := len(results) / 2
+	median := results[medianIdx]
+
+	return StrategyResult{
+		Name:             strategyName,
+		TotalTime:        median.TotalTime,
+		ThroughputMBps:   median.ThroughputMBps,
+		ThroughputRowsPS: median.ThroughputRowsPS,
+	}
+}
+
+// printIterationStats prints detailed statistics for multiple iterations
+func printIterationStats(results []StrategyResult) {
+	if len(results) <= 1 {
+		return
+	}
+
+	times := make([]time.Duration, len(results))
+	for i, r := range results {
+		times[i] = r.TotalTime
+	}
+
+	// Sort for percentile calculations
+	slices.Sort(times)
+
+	min := times[0]
+	max := times[len(times)-1]
+	median := times[len(times)/2]
+
+	// Calculate mean
+	var sum time.Duration
+	for _, t := range times {
+		sum += t
+	}
+	mean := sum / time.Duration(len(times))
+
+	// Calculate standard deviation
+	var variance float64
+	for _, t := range times {
+		diff := float64(t - mean)
+		variance += diff * diff
+	}
+	stddev := time.Duration(math.Sqrt(variance / float64(len(times))))
+
+	fmt.Printf("    Min: %v | Median: %v | Mean: %v | Max: %v | StdDev: %v\n",
+		min.Round(time.Millisecond),
+		median.Round(time.Millisecond),
+		mean.Round(time.Millisecond),
+		max.Round(time.Millisecond),
+		stddev.Round(time.Millisecond))
+}
+
 func printResults(results []StrategyResult) {
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].TotalTime < results[j].TotalTime
@@ -350,21 +469,65 @@ func printComparisonTable(results []StrategyResult) {
 	table.Render()
 }
 
-func printConfiguration(numWorkers int, totalRows int, totalSizeMB float64, numTasks int, chunkSize int) {
+func printConfiguration(numWorkers int, totalRows int, totalSizeMB float64, numTasks int, chunkSize int, balanced bool) {
 	bold.Println("⚙️  Configuration:")
 	fmt.Printf("  Workers:          %d (using %d CPU cores)\n", numWorkers, runtime.NumCPU())
 	fmt.Printf("  Strategies:       7 different scheduling algorithms\n")
 	fmt.Printf("  Dataset:          %s temperature readings\n", formatNumber(totalRows))
 	fmt.Printf("  Chunk Size:       %s rows per task\n", formatNumber(chunkSize))
+	if balanced {
+		fmt.Printf("  Mode:             BALANCED (uniform task sizes)\n")
+	} else {
+		fmt.Printf("  Mode:             IMBALANCED (realistic workload)\n")
+	}
 	fmt.Println()
 
 	bold.Println("📊 Workload Details:")
 	fmt.Printf("  • %s total tasks submitted to scheduler\n", formatNumber(numTasks))
 	fmt.Printf("  • %s total measurements to process\n", formatNumber(totalRows))
 	fmt.Printf("  • %.1f GB of data\n", totalSizeMB/1024)
-	fmt.Printf("  • 3 HUGE stations (68%% of data) → %s tasks\n", formatNumber(numTasks*68/100))
-	fmt.Printf("  • 27 smaller stations (32%% of data) → %s tasks\n", formatNumber(numTasks*32/100))
+	if !balanced {
+		fmt.Printf("  • 3 HUGE stations (68%% of data) → %s tasks\n", formatNumber(numTasks*68/100))
+		fmt.Printf("  • 27 smaller stations (32%% of data) → %s tasks\n", formatNumber(numTasks*32/100))
+	} else {
+		fmt.Printf("  • All tasks have uniform size (~%s rows each)\n", formatNumber(chunkSize))
+	}
 	fmt.Println()
+}
+
+func getStrategiesToRun(isolated string, iterations int, warmup int) []string {
+	if isolated != "" {
+		found := slices.Contains(allStrategies, isolated)
+		if !found {
+			red.Printf("Error: Unknown strategy '%s'\n", isolated)
+			fmt.Println("Available strategies:", allStrategies)
+			os.Exit(1)
+		}
+		fmt.Printf("🔬 ISOLATED MODE: Testing only '%s'\n", isolated)
+		if iterations > 1 {
+			fmt.Printf("  Running %d iterations with %d warmup runs\n", iterations, warmup)
+		}
+		fmt.Println()
+		return []string{isolated}
+	}
+	return allStrategies
+}
+
+func makeProgressBar(strategies []string) *progressbar.ProgressBar {
+	return progressbar.NewOptions(len(strategies),
+		progressbar.OptionSetDescription("Testing strategies"),
+		progressbar.OptionSetWidth(50),
+		progressbar.OptionShowCount(),
+		progressbar.OptionShowIts(),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "█",
+			SaucerHead:    "█",
+			SaucerPadding: "░",
+			BarStart:      "│",
+			BarEnd:        "│",
+		}),
+		progressbar.OptionEnableColorCodes(true),
+	)
 }
 
 func main() {
@@ -373,17 +536,26 @@ func main() {
 	chunkSizeFlag := flag.Int("chunk", 500, "Rows per task chunk (smaller = more tasks, default 500)")
 	ciModeFlag := flag.Bool("ci", false, "CI mode: disable progress bar and animations")
 	plainModeFlag := flag.Bool("plain", false, "Plain mode: disable colors and emojis")
+	balancedFlag := flag.Bool("balanced", true, "Balanced mode: generate uniform-sized chunks to reduce workload imbalance")
+	isolatedFlag := flag.String("isolated", "", "Isolated mode: test only one strategy (e.g., 'Work-Stealing', 'MPMC Queue')")
+	iterationsFlag := flag.Int("iterations", 1, "Number of iterations to run per strategy (for statistical analysis)")
+	warmupFlag := flag.Int("warmup", 0, "Number of warmup iterations before measurement")
 	flag.Parse()
 
 	ciMode := isCIMode(*ciModeFlag)
-	_ = *plainModeFlag // Reserved for future plain mode implementation
+	_ = *plainModeFlag
 
 	numWorkers := *workersFlag
 	if numWorkers == 0 {
 		numWorkers = min(runtime.NumCPU(), 8)
 	}
 
-	tasks := generateStationData(*totalRowsFlag, *chunkSizeFlag)
+	var tasks []StationData
+	if *balancedFlag {
+		tasks = generateBalancedStationData(*totalRowsFlag, *chunkSizeFlag)
+	} else {
+		tasks = generateStationData(*totalRowsFlag, *chunkSizeFlag)
+	}
 
 	totalRows := 0
 	totalSizeMB := 0.0
@@ -392,17 +564,9 @@ func main() {
 		totalSizeMB += task.SizeMB
 	}
 
-	printConfiguration(numWorkers, totalRows, totalSizeMB, len(tasks), *chunkSizeFlag)
+	printConfiguration(numWorkers, totalRows, totalSizeMB, len(tasks), *chunkSizeFlag, *balancedFlag)
 
-	strategies := []string{
-		"Channel",
-		"Work-Stealing",
-		"MPMC Queue",
-		"LMAX Disruptor",
-		"Priority Queue",
-		"Skip List",
-		"Bitmask",
-	}
+	strategies := getStrategiesToRun(*isolatedFlag, *iterationsFlag, *warmupFlag)
 
 	results := make([]StrategyResult, 0, len(strategies))
 
@@ -411,31 +575,54 @@ func main() {
 
 	var bar *progressbar.ProgressBar
 	if !ciMode {
-		bar = progressbar.NewOptions(len(strategies),
-			progressbar.OptionSetDescription("Testing strategies"),
-			progressbar.OptionSetWidth(50),
-			progressbar.OptionShowCount(),
-			progressbar.OptionShowIts(),
-			progressbar.OptionSetTheme(progressbar.Theme{
-				Saucer:        "█",
-				SaucerHead:    "█",
-				SaucerPadding: "░",
-				BarStart:      "│",
-				BarEnd:        "│",
-			}),
-			progressbar.OptionEnableColorCodes(true),
-		)
+		bar = makeProgressBar(strategies)
 	}
 
 	for i, strategy := range strategies {
 		if ciMode {
 			fmt.Printf("[%d/%d] Testing strategy: %s\n", i+1, len(strategies), strategy)
 		}
-		if bar != nil {
-			bar.Describe(fmt.Sprintf("Testing: %s", strategy))
+
+		if *warmupFlag > 0 {
+			for w := 0; w < *warmupFlag; w++ {
+				if ciMode {
+					fmt.Printf("  Warmup %d/%d...\n", w+1, *warmupFlag)
+				}
+				_ = runStrategy(strategy, tasks, numWorkers, nil)
+				runtime.GC() // Force GC between warmup runs
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
-		result := runStrategy(strategy, tasks, numWorkers, bar)
-		results = append(results, result)
+
+		iterationResults := make([]StrategyResult, 0, *iterationsFlag)
+		for iter := 0; iter < *iterationsFlag; iter++ {
+			if ciMode && *iterationsFlag > 1 {
+				fmt.Printf("  Iteration %d/%d...\n", iter+1, *iterationsFlag)
+			}
+			if bar != nil {
+				bar.Describe(fmt.Sprintf("Testing: %s", strategy))
+			}
+
+			result := runStrategy(strategy, tasks, numWorkers, bar)
+			iterationResults = append(iterationResults, result)
+
+			if iter < *iterationsFlag-1 {
+				runtime.GC()
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+
+		var finalResult StrategyResult
+		if *iterationsFlag == 1 {
+			finalResult = iterationResults[0]
+		} else {
+			finalResult = calculateStats(strategy, iterationResults)
+			if ciMode {
+				printIterationStats(iterationResults)
+			}
+		}
+
+		results = append(results, finalResult)
 
 		if !ciMode {
 			time.Sleep(time.Millisecond * 300)
@@ -444,8 +631,8 @@ func main() {
 		if ciMode {
 			fmt.Printf("✓ %s completed in %v (%.1f M rows/s)\n",
 				strategy,
-				result.TotalTime.Round(time.Millisecond),
-				result.ThroughputRowsPS/1_000_000)
+				finalResult.TotalTime.Round(time.Millisecond),
+				finalResult.ThroughputRowsPS/1_000_000)
 		}
 	}
 
