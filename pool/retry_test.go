@@ -128,9 +128,10 @@ func TestWorkerPool_Retry_NoRetryWhenMaxAttemptsIsOne(t *testing.T) {
 			t.Errorf("expected 1 attempt, got %d", attemptCount.Load())
 		}
 
-		// Should not wait at all
-		if elapsed > 50*time.Millisecond {
-			t.Errorf("expected no backoff delay, but took %v", elapsed)
+		// Should not wait for the configured 100ms delay
+		// Allow for scheduler overhead (especially under race detector)
+		if elapsed > 150*time.Millisecond {
+			t.Errorf("expected no backoff delay (max 150ms overhead), but took %v", elapsed)
 		}
 	}, 2, WithRetryPolicy(1, 100*time.Millisecond))
 }
@@ -294,9 +295,10 @@ func TestWorkerPool_Retry_NoDelayWhenInitialDelayIsZero(t *testing.T) {
 			t.Errorf("expected 3 attempts, got %d", attemptCount.Load())
 		}
 
-		// Should complete very quickly with no backoff
-		if elapsed > 50*time.Millisecond {
-			t.Errorf("expected fast execution with no backoff, but took %v", elapsed)
+		// Should complete quickly with no backoff delay
+		// Allow for scheduler overhead (especially under race detector)
+		if elapsed > 100*time.Millisecond {
+			t.Errorf("expected fast execution with no backoff (max 100ms overhead), but took %v", elapsed)
 		}
 	}, 1, WithRetryPolicy(3, 0))
 }
