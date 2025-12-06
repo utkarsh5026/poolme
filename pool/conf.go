@@ -119,6 +119,9 @@ type workerPoolConfig struct {
 	affinityFunc     func(any) string
 	affinityFuncType string
 
+	// CPU core affinity configuration
+	enableCPUAffinity bool
+
 	// Hook functions stored as any for flexibility
 	beforeTaskStart     func(any)
 	beforeTaskStartType string
@@ -724,6 +727,29 @@ func WithAffinity[T any](affinityFunc func(task T) string) WorkerPoolOption {
 		}
 		var zero T
 		cfg.affinityFuncType = getTypeName(zero)
+	}
+}
+
+// WithCPUAffinity enables or disables CPU core affinity for worker threads.
+// When enabled, each worker goroutine is pinned to a specific CPU core to improve
+// cache locality and reduce context switching overhead.
+//
+// CPU affinity can provide performance benefits for:
+// - CPU-bound workloads with high cache locality requirements
+// - Workloads that benefit from consistent core assignment
+// - Systems with NUMA architectures
+//
+// Default: true (enabled)
+//
+// Example (disable CPU affinity):
+//
+//	pool := NewWorkerPool[int, int](
+//	    WithWorkerCount(8),
+//	    WithCPUAffinity(false),
+//	)
+func WithCPUAffinity(enable bool) WorkerPoolOption {
+	return func(cfg *workerPoolConfig) {
+		cfg.enableCPUAffinity = enable
 	}
 }
 

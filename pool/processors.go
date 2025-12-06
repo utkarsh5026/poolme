@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/utkarsh5026/poolme/internal/cpu"
 	"github.com/utkarsh5026/poolme/internal/scheduler"
 	"github.com/utkarsh5026/poolme/internal/types"
 )
@@ -173,15 +174,20 @@ func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Re
 // Each worker pulls tasks from the scheduling strategy and processes them using the provided
 // process function and result handler. The function automatically closes the result channel
 // once all workers have completed.
-func startWorkers[T, R any](ctx context.Context, workers int, strategy schedulingStrategy[T, R], f ProcessFunc[T, R], h resultHandler[T, R], resChan chan *Result[R, int64]) {
-	debugLog("startWorkers: spawning %d workers", workers)
+func startWorkers[T, R any](ctx context.Context, conf *processorConfig[T, R], strategy schedulingStrategy[T, R], f ProcessFunc[T, R], h resultHandler[T, R], resChan chan *Result[R, int64]) {
+	debugLog("startWorkers: spawning %d workers", conf.WorkerCount)
 	var wg sync.WaitGroup
-	wg.Add(workers)
-	for i := range workers {
+	wg.Add(conf.WorkerCount)
+	for i := range conf.WorkerCount {
 		go func(workerID int) {
-			debugLog("worker %d: started", workerID)
+			var cleanup func()
+			if conf.EnableCPUAffinity {
+				cleanup = cpu.SetupWorkerAffinity(workerID)
+			} else {
+				cleanup = func() {}
+			}
 			defer func() {
-				debugLog("worker %d: exiting", workerID)
+				cleanup()
 				wg.Done()
 			}()
 			_ = strategy.Worker(ctx, int64(workerID), f, h)
@@ -219,7 +225,8 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 		resChan <- result
 	}
 
-	startWorkers(ctx, conf.WorkerCount, s, p, handler, resChan)
+	// Start workers first - required for strategies like channel that need active receivers
+	startWorkers(ctx, conf, s, p, handler, resChan)
 
 	go func() {
 		<-ctx.Done()
@@ -229,36 +236,9 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 		})
 	}()
 
-	submitErrChan := make(chan error, 1)
-	submittedCountChan := make(chan int, 1)
-
-	go func() {
-		debugLog("runScheduler: submitting batch of %d tasks", len(tasks))
-		submittedCount, err := s.SubmitBatch(tasks)
-		if err != nil {
-			submitErrChan <- err
-			return
-		}
-		submittedCountChan <- submittedCount
-	}()
-
-	var submittedCount int
-	var submissionErr error
-
-	// First, try to get submission result or context done
-	select {
-	case submissionErr = <-submitErrChan:
-		debugLog("runScheduler: got submission error: %v", submissionErr)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			return submissionErr
-		}
-	case submittedCount = <-submittedCountChan:
-		debugLog("runScheduler: submitted %d tasks", submittedCount)
-	case <-ctx.Done():
-		return ctx.Err()
+	submittedCount, err := s.SubmitBatch(tasks)
+	if err != nil {
+		return err
 	}
 
 	err = collect(submittedCount, resChan, onResult)
