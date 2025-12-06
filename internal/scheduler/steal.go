@@ -187,8 +187,7 @@ func (w *wsDeque[T, R]) Len() int {
 // This is based on the design used in Go's runtime scheduler and other
 // modern work-stealing schedulers (Java ForkJoinPool, .NET TPL, etc.)
 type workSteal[T any, R any] struct {
-	globalQueue               *wsDeque[T, R]
-	glock                     sync.Mutex
+	globalQueue               *mpmcQueue[*types.SubmittedTask[T, R]]
 	workerQueues              []*wsDeque[T, R]
 	conf                      *ProcessorConfig[T, R]
 	stealSeed                 atomic.Uint64 // Round-robin counter for task distribution
@@ -199,8 +198,9 @@ type workSteal[T any, R any] struct {
 
 func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConfig[T, R]) *workSteal[T, R] {
 	n := conf.WorkerCount
+	globalQueueSize := max(maxLocalSize*n*4, 65536) // Minimum 64K for benchmarks
 	w := &workSteal[T, R]{
-		globalQueue:  newWSDeque[T, R](maxLocalSize),
+		globalQueue:  newMPMCQueue[*types.SubmittedTask[T, R]](globalQueueSize, false),
 		maxLocalSize: maxLocalSize,
 		quit:         newWorkerSignal(),
 		workerQueues: make([]*wsDeque[T, R], n),
@@ -221,10 +221,7 @@ func newWorkStealingStrategy[T any, R any](maxLocalSize int, conf *ProcessorConf
 // 2. If local queue is above threshold, add to global queue (load balancing)
 // 3. This gives both cache locality AND prevents queue buildup
 func (s *workSteal[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
-	s.glock.Lock()
-	s.globalQueue.PushBack(task)
-	s.glock.Unlock()
-	return nil
+	return s.globalQueue.Enqueue(task)
 }
 
 // SubmitBatch pre-distributes tasks across worker queues for optimal load balancing.
@@ -234,14 +231,13 @@ func (s *workSteal[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, 
 		return 0, nil
 	}
 
-	// Push all tasks to global queue under a single lock
-	// This is simpler and avoids the complexity of direct worker queue distribution
+	// Push all tasks to global queue using lock-free MPMC operations
 	// Workers will pull in batches from the global queue
-	s.glock.Lock()
-	for _, t := range tasks {
-		s.globalQueue.PushBack(t)
+	for i, t := range tasks {
+		if err := s.globalQueue.Enqueue(t); err != nil {
+			return i, err
+		}
 	}
-	s.glock.Unlock()
 
 	return len(tasks), nil
 }
@@ -262,10 +258,17 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 
 	for {
 		if globalCounter%64 == 0 {
-			if err := s.checkQuit(ctx, drain); err != nil {
-				return err
+			select {
+			case <-ctx.Done():
+				drain()
+				return ctx.Err()
+			case <-s.quit.Wait():
+				drain()
+				return ErrSchedulerClosed
+			default:
 			}
 		}
+
 		globalCounter++
 
 		for range fastCheckCounter {
@@ -278,18 +281,15 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 			}
 		}
 
-		s.glock.Lock()
-		t := s.globalQueue.PopFront()
-		if t != nil {
+		if t, ok := s.globalQueue.TryDequeue(); ok {
 			batch := []*types.SubmittedTask[T, R]{t}
 			for range batchStealSize - 1 {
-				if task := s.globalQueue.PopFront(); task != nil {
+				if task, ok := s.globalQueue.TryDequeue(); ok {
 					batch = append(batch, task)
 				} else {
 					break
 				}
 			}
-			s.glock.Unlock()
 
 			if err := executeTask(batch[0]); err != nil {
 				return err
@@ -302,7 +302,6 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 			}
 			continue
 		}
-		s.glock.Unlock()
 
 		if t := s.steal(int(workerID)); t != nil {
 			if err := executeTask(t); err != nil {
@@ -335,23 +334,6 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 			runtime.Gosched()
 		}
 
-	}
-}
-
-// checkQuit checks for cancellation signals via context, explicit quit channel, or stop-on-error signal.
-// If a cancellation is detected, it drains the worker's local queue to ensure
-// no tasks are abandoned, then returns the appropriate error (ctx.Err() or nil).
-// If no quit condition occurs, it returns nil and work may continue.
-func (s *workSteal[T, R]) checkQuit(ctx context.Context, drainFunc func()) error {
-	select {
-	case <-ctx.Done():
-		drainFunc()
-		return ctx.Err()
-	case <-s.quit.Wait():
-		drainFunc()
-		return ErrSchedulerClosed
-	default:
-		return nil
 	}
 }
 
@@ -426,13 +408,11 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 	go func() {
 		defer wg.Done()
 		for {
-			s.glock.Lock()
-			t := s.globalQueue.PopFront()
-			s.glock.Unlock()
-			if t == nil {
+			if t, ok := s.globalQueue.TryDequeue(); ok {
+				s.runner.ExecuteWithoutCare(ctx, t, executor, h)
+			} else {
 				break
 			}
-			s.runner.ExecuteWithoutCare(ctx, t, executor, h)
 		}
 	}()
 
@@ -441,4 +421,5 @@ func (s *workSteal[T, R]) drain(ctx context.Context, localQueue *wsDeque[T, R], 
 
 func (s *workSteal[T, R]) Shutdown() {
 	s.quit.Close()
+	s.globalQueue.Close()
 }
