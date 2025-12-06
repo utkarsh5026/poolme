@@ -62,7 +62,7 @@ jobs:
           echo "Dataset: 10,000,000 temperature readings"
           echo "=========================================="
           echo ""
-          go run main.go -rows=10000000 -chunk=${{ matrix.chunk_size }} -ci
+          go run . -rows=10000000 -chunk=${{ matrix.chunk_size }} -ci
 
       - name: Save results
         run: |

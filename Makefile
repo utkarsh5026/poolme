@@ -241,7 +241,7 @@ demo-billion-small:
 	@echo "$(YELLOW)🌡️  Processing 5 million temperature measurements$(NC)"
 	@echo "$(YELLOW)   Quick test to verify all strategies work correctly$(NC)"
 	@echo ""
-	@cd examples/real-world/billion_rows && $(GO) run main.go -rows 5000000
+	@cd examples/real-world/billion_rows && $(GO) run . -rows 5000000
 	@echo ""
 	@echo "$(GREEN)✅ Quick test complete!$(NC)"
 	@echo ""
@@ -255,7 +255,7 @@ demo-billion-large:
 	@echo "$(YELLOW)🌡️  Processing 1 Billion temperature measurements$(NC)"
 	@echo "$(YELLOW)   Large-scale test - may take 2-3 seconds$(NC)"
 	@echo ""
-	@cd examples/real-world/billion_rows && $(GO) run main.go -rows 1000000000
+	@cd examples/real-world/billion_rows && $(GO) run . -rows 1000000000
 	@echo ""
 	@echo "$(GREEN)✅ Large-scale benchmark complete!$(NC)"
 	@echo ""
@@ -271,7 +271,7 @@ demo-billion-stress:
 	@echo ""
 	@for i in 1 2 3; do \
 		echo "$(YELLOW)━━━ Iteration $$i/3 ━━━$(NC)"; \
-		cd examples/real-world/billion_rows && $(GO) run main.go -rows 5000000 || exit 1; \
+		cd examples/real-world/billion_rows && $(GO) run . -rows 5000000 || exit 1; \
 		echo ""; \
 	done
 	@echo "$(GREEN)✅ All iterations completed successfully!$(NC)"
