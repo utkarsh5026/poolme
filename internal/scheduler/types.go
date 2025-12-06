@@ -87,4 +87,7 @@ type ProcessorConfig[T, R any] struct {
 
 	// Affinity function to map tasks to specific workers (can be nil).
 	AffinityFunc func(t T) (hash string)
+
+	// Enable CPU core affinity for worker threads (pins each worker to a specific CPU core).
+	EnableCPUAffinity bool
 }
