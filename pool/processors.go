@@ -230,21 +230,19 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 
 	go func() {
 		<-ctx.Done()
-		debugLog("runScheduler: context cancelled, triggering strategy shutdown")
 		shutdownOnce.Do(func() {
 			s.Shutdown()
 		})
 	}()
 
-	submittedCount, err := s.SubmitBatch(tasks)
-	if err != nil {
-		return err
-	}
-
-	err = collect(submittedCount, resChan, onResult)
+	submittedCount, submitErr := s.SubmitBatch(tasks)
+	collectErr := collect(submittedCount, resChan, onResult)
 
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return err
+	if collectErr != nil {
+		return collectErr
+	}
+	return submitErr
 }
