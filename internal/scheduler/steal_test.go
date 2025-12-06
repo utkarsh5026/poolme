@@ -630,19 +630,19 @@ func TestWorkSteal_Worker(t *testing.T) {
 		}
 	}
 
-	// Start worker
-	workerDone := make(chan error)
-	go func() {
-		workerDone <- s.Worker(ctx, workerID, executor, handler)
-	}()
-
-	// Submit tasks to the worker's queue
+	// Submit tasks to the worker's queue BEFORE starting worker to avoid race condition
 	numTasks := 10
 	for i := 0; i < numTasks; i++ {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.workerQueues[workerID].PushBack(task)
 	}
+
+	// Start worker
+	workerDone := make(chan error)
+	go func() {
+		workerDone <- s.Worker(ctx, workerID, executor, handler)
+	}()
 
 	// Wait for processing
 	time.Sleep(200 * time.Millisecond)
@@ -724,16 +724,16 @@ func TestWorkSteal_WorkerWithError(t *testing.T) {
 				}
 			}
 
+			// Submit a task BEFORE starting worker to avoid race condition
+			future := types.NewFuture[int, int64]()
+			task := types.NewSubmittedTask(1, 1, future)
+			s.workerQueues[workerID].PushBack(task)
+
 			// Start worker
 			workerDone := make(chan error, 1)
 			go func() {
 				workerDone <- s.Worker(ctx, workerID, executor, handler)
 			}()
-
-			// Submit a task
-			future := types.NewFuture[int, int64]()
-			task := types.NewSubmittedTask(1, 1, future)
-			s.workerQueues[workerID].PushBack(task)
 
 			// Wait for processing
 			time.Sleep(200 * time.Millisecond)
@@ -791,18 +791,19 @@ func TestWorkSteal_WorkerContextCancellation(t *testing.T) {
 		}
 	}
 
-	// Start worker
-	workerDone := make(chan error)
-	go func() {
-		workerDone <- s.Worker(ctx, workerID, executor, handler)
-	}()
-
-	// Submit some tasks
+	// Submit some tasks BEFORE starting worker to avoid race condition
+	// (PushBack is only safe when called by the owner worker)
 	for i := 0; i < 10; i++ {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.workerQueues[workerID].PushBack(task)
 	}
+
+	// Start worker
+	workerDone := make(chan error)
+	go func() {
+		workerDone <- s.Worker(ctx, workerID, executor, handler)
+	}()
 
 	// Wait a bit for some processing
 	time.Sleep(50 * time.Millisecond)

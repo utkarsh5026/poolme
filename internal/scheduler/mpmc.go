@@ -204,6 +204,69 @@ func (q *mpmcQueue[T]) Enqueue(task T) error {
 	}
 }
 
+// EnqueueBatch adds multiple items to the queue using a single atomic reservation.
+// This significantly reduces CAS contention for high-throughput batch submissions.
+func (q *mpmcQueue[T]) EnqueueBatch(tasks []T) (int, error) {
+	if q.isClosed() {
+		return 0, ErrQueueClosed
+	}
+
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+
+	count := uint64(len(tasks))
+	spinCount := 0
+
+	for {
+		tail := atomic.LoadUint64(&q.tail)
+
+		if q.bounded {
+			head := atomic.LoadUint64(&q.head)
+			if (tail + count - head) > uint64(q.capacity) {
+				return 0, ErrQueueFull
+			}
+		}
+
+		if atomic.CompareAndSwapUint64(&q.tail, tail, tail+count) {
+
+			for i := range count {
+				currentSeq := tail + i
+				slot := &q.ring[currentSeq&q.mask]
+
+				// Wait for the slot to be ready (sequence == currentSeq)
+				// This handles the case where we reserved the slot but the consumer
+				// hasn't finished reading the previous value yet.
+				// Since we already reserved the tail, we MUST wait.
+				waitSpins := 0
+				for atomic.LoadUint64(&slot.sequence) != currentSeq {
+					waitSpins++
+					if waitSpins > maxSpinAttempts {
+						runtime.Gosched()
+						waitSpins = 0
+					}
+				}
+
+				slot.value = tasks[i]
+				atomic.StoreUint64(&slot.sequence, currentSeq+1)
+			}
+
+			select {
+			case q.notifyC <- signal{}:
+			default:
+			}
+
+			return int(count), nil
+		}
+
+		spinCount++
+		if spinCount > maxSpinAttempts {
+			runtime.Gosched()
+			spinCount = 0
+		}
+	}
+}
+
 // Dequeue removes and returns an item from the queue.
 func (q *mpmcQueue[T]) Dequeue() (T, error) {
 	var zero T
@@ -395,26 +458,32 @@ func (s *mpmc[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 
 // SubmitBatch enqueues multiple tasks, returning the count of successful submissions.
 //
-// Tasks are submitted sequentially. If an error occurs mid-batch:
-//   - Already-submitted tasks remain in the queue
-//   - The count of successful submissions is returned
-//   - The error indicates why remaining tasks weren't submitted
+// Uses the optimized EnqueueBatch for lock-free bulk submission.
 func (s *mpmc[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
 	if s.quitter.IsClosed() {
 		return 0, ErrQueueClosed
 	}
 
-	for i, task := range tasks {
-		select {
-		case <-s.quitter.Wait():
-			return i, ErrQueueClosed
-		default:
-			if err := s.queue.Enqueue(task); err != nil {
-				return i, err
+	n, err := s.queue.EnqueueBatch(tasks)
+	if err == nil {
+		return n, nil
+	}
+
+	if err == ErrQueueFull {
+		for i, task := range tasks {
+			select {
+			case <-s.quitter.Wait():
+				return i, ErrQueueClosed
+			default:
+				if err := s.queue.Enqueue(task); err != nil {
+					return i, err
+				}
 			}
 		}
+		return len(tasks), nil
 	}
-	return len(tasks), nil
+
+	return n, err
 }
 
 // Worker runs the main processing loop for a single worker goroutine.

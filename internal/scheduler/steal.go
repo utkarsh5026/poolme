@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	fastCheckCounter          = 3
+	fastCheckCounter          = 16
 	defaultLocalQueueCapacity = 256 // Increased for better local throughput
 	maxStealAttempts          = 8   // Increased to check more victims
 	localQueueThreshold       = 128 // Push to global when local exceeds this
@@ -227,13 +227,21 @@ func (s *workSteal[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 // SubmitBatch pre-distributes tasks across worker queues for optimal load balancing.
 // This eliminates per-task submission overhead and gives workers balanced starting queues.
 func (s *workSteal[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
-	for i, t := range tasks {
-		if err := s.globalQueue.Enqueue(t); err != nil {
-			return i, err
-		}
+	n, err := s.globalQueue.EnqueueBatch(tasks)
+	if err == nil {
+		return n, nil
 	}
 
-	return len(tasks), nil
+	// Fallback to individual
+	if err == ErrQueueFull {
+		for i, t := range tasks {
+			if err := s.globalQueue.Enqueue(t); err != nil {
+				return i, err
+			}
+		}
+		return len(tasks), nil
+	}
+	return n, err
 }
 
 // worker is the main loop for each worker goroutine.
