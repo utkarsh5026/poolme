@@ -223,7 +223,7 @@ demo-billion:
 	@echo "$(YELLOW)🌡️  Processing 65 million temperature measurements$(NC)"
 	@echo "$(YELLOW)   Expected: 250-400M rows/sec, completes in under 1 second!$(NC)"
 	@echo ""
-	@cd examples/real-world/billion_rows && $(GO) run main.go
+	@cd examples/real-world/billion_rows && $(GO) run .
 	@echo ""
 	@echo "$(GREEN)✅ Billion rows demo complete!$(NC)"
 	@echo ""
