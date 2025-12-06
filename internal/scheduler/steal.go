@@ -227,12 +227,6 @@ func (s *workSteal[T, R]) Submit(task *types.SubmittedTask[T, R]) error {
 // SubmitBatch pre-distributes tasks across worker queues for optimal load balancing.
 // This eliminates per-task submission overhead and gives workers balanced starting queues.
 func (s *workSteal[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
-	if len(tasks) == 0 {
-		return 0, nil
-	}
-
-	// Push all tasks to global queue using lock-free MPMC operations
-	// Workers will pull in batches from the global queue
 	for i, t := range tasks {
 		if err := s.globalQueue.Enqueue(t); err != nil {
 			return i, err
