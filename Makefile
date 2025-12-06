@@ -1,4 +1,4 @@
-.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet install demo demo-billion
+.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet gosec install demo demo-billion
 
 # Variables
 BINARY_NAME=poolme
@@ -48,7 +48,8 @@ help:
 	@echo "  make lint              - Run golangci-lint"
 	@echo "  make fmt               - Format code with gofmt"
 	@echo "  make vet               - Run go vet"
-	@echo "  make check             - Run fmt, vet, and lint"
+	@echo "  make gosec             - Run gosec security scanner"
+	@echo "  make check             - Run fmt, vet, lint, and gosec"
 	@echo ""
 	@echo "$(GREEN)Examples:$(NC)"
 	@echo "  make demo              - Run ALL real-world demos"
@@ -184,8 +185,18 @@ vet:
 	$(GO) vet $(PACKAGES)
 	@echo "$(GREEN)Vet complete!$(NC)"
 
-## check: Run fmt, vet, and lint
-check: fmt vet lint
+## gosec: Run gosec security scanner
+gosec:
+	@echo "$(BLUE)Running gosec security scanner...$(NC)"
+	@if command -v gosec >/dev/null 2>&1; then \
+		gosec ./...; \
+	else \
+		echo "$(RED)gosec not found. Install it with: go install github.com/securego/gosec/v2/cmd/gosec@latest$(NC)"; \
+		exit 1; \
+	fi
+
+## check: Run fmt, vet, lint, and gosec
+check: fmt vet lint gosec
 	@echo "$(GREEN)All checks passed!$(NC)"
 
 ## clean: Clean build artifacts and test cache

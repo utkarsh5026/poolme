@@ -130,7 +130,7 @@ func createConfig[T, R any](opts ...WorkerPoolOption) *scheduler.ProcessorConfig
 		backoffType:         BackoffExponential, // Default backoff
 		backoffInitialDelay: 100 * time.Millisecond,
 		backoffMaxDelay:     5 * time.Second,
-		backoffJitterFactor: 0.1, // Default 10% jitter for jittered backoff
+		backoffJitterFactor: 0.1,  // Default 10% jitter for jittered backoff
 		enableCPUAffinity:   true, // Default: enable CPU affinity
 	}
 
