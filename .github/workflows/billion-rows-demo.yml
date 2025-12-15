@@ -71,7 +71,7 @@ jobs:
           echo "Completed at: $(date)" >> results/chunk-${{ matrix.chunk_size }}.txt
 
       - name: Upload results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: results-chunk-${{ matrix.chunk_size }}
           path: results/
