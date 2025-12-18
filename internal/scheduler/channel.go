@@ -99,9 +99,6 @@ func (s *channelStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) 
 	for _, task := range tasks {
 		idx := s.next(task)
 		if exit := s.tryToSubmit(idx, task); exit {
-			if submitted == 0 {
-				return 0, ErrSchedulerClosed
-			}
 			return submitted, ErrSchedulerClosed
 		}
 		submitted++
@@ -124,8 +121,7 @@ func (s *channelStrategy[T, R]) tryToSubmit(idx int64, task *types.SubmittedTask
 		return false
 	}
 
-	sent = s.submitRoundRobin(int(idx), task)
-	if !sent {
+	if sent = s.submitRoundRobin(int(idx), task); !sent {
 		select {
 		case s.taskChans[idx] <- task:
 		case <-s.quitter.Wait():
@@ -156,8 +152,8 @@ func (s *channelStrategy[T, R]) sendToChannel(idx int64, task *types.SubmittedTa
 // channel is full. Returns true if the task is submitted, or true immediately if a quit signal was received.
 func (s *channelStrategy[T, R]) submitRoundRobin(idx int, task *types.SubmittedTask[T, R]) bool {
 	numWorkers := len(s.taskChans)
-	for j := 1; j < numWorkers; j++ {
-		altIdx := (idx + j) % numWorkers
+	for j := range numWorkers - 1 {
+		altIdx := (idx + j + 1) % numWorkers
 		select {
 		case s.taskChans[altIdx] <- task:
 			return true
