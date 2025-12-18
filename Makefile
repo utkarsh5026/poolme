@@ -227,7 +227,7 @@ bench-uniform:
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
 	@echo "$(YELLOW)📊 Workload: 1B tasks, all identical size (pure throughput)$(NC)"
-	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true
 	@echo ""
 
 ## bench-skewed: Scenario 2 - Highly skewed workload (1B tasks)
@@ -237,7 +237,7 @@ bench-skewed:
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
 	@echo "$(YELLOW)📊 Workload: 68%% in 3 huge tasks, extreme load imbalance$(NC)"
-	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 1000000000 -chunk 5000 -balanced=false
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 1000000000 -chunk 5000 -balanced=false
 	@echo ""
 
 ## bench-priority: Scenario 3 - Priority-ordered processing (100M tasks)
@@ -247,7 +247,7 @@ bench-priority:
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
 	@echo "$(YELLOW)📊 Workload: 100M tasks, reverse order (test priority reordering)$(NC)"
-	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 100000000 -chunk 1000 -balanced=false -priority=true
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 100000000 -chunk 1000 -balanced=false -priority=true
 	@echo ""
 
 ## bench-burst: Scenario 4 - Burst traffic with backpressure (500M tasks)
@@ -257,7 +257,7 @@ bench-burst:
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
 	@echo "$(YELLOW)📊 Workload: 500M tasks in waves (bursty traffic pattern)$(NC)"
-	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 500000000 -chunk 500 -balanced=true -burst=true
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 500000000 -chunk 500 -balanced=true -burst=true
 	@echo ""
 
 ## bench-small-pool: Scenario 5 - Small worker pool (1B tasks, 4 workers)
@@ -267,7 +267,7 @@ bench-small-pool:
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
 	@echo "$(YELLOW)📊 Workload: 1B tasks with only 4 workers (minimal overhead)$(NC)"
-	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true -workers=4
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true -workers=4
 	@echo ""
 
 ## bench-all: Run all 5 benchmark scenarios sequentially
