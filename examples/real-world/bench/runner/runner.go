@@ -43,59 +43,30 @@ var (
 	}
 )
 
-func parseStrategyOutput(output string) (time.Duration, float64, float64, error) {
+func parseStrategyOutput(output string) (time.Duration, float64, error) {
 	lines := strings.Split(output, "\n")
 
 	var totalTime time.Duration
-	var rowsPerSec, mbPerSec float64
+	var tasksPerSec float64
 
-	// Look for completion message first (most reliable)
+	// Parse the table output - new format has: Rank | Scheduler | Time | Tasks/sec | vs Fastest
 	for _, line := range lines {
-		if strings.Contains(line, "completed in") && strings.Contains(line, "M tasks/s") {
-			// Format: "✓ Channel completed in 2ms (62.7 M tasks/s)"
-			// Extract the duration and throughput
-
-			// Find "completed in" and parse what follows
-			if idx := strings.Index(line, "completed in "); idx >= 0 {
-				rest := line[idx+len("completed in "):]
-
-				// Parse duration (e.g., "2ms" or "1.5s")
-				var durationStr string
-				var throughput float64
-				n, _ := fmt.Sscanf(rest, "%s (%f M tasks/s)", &durationStr, &throughput)
-				if n == 2 {
-					if d, err := time.ParseDuration(durationStr); err == nil {
-						totalTime = d
-						rowsPerSec = throughput * 1_000_000
-						break
-					}
+		if strings.Contains(line, "│") && !strings.Contains(line, "RANK") &&
+			!strings.Contains(line, "SCHEDULER") && !strings.Contains(line, "─") {
+			parts := strings.Split(line, "│")
+			if len(parts) >= 5 {
+				// Try to parse time (column 3, index 2 after split)
+				timeStr := strings.TrimSpace(parts[3])
+				if d, err := time.ParseDuration(timeStr); err == nil {
+					totalTime = d
 				}
-			}
-		}
-	}
 
-	// If not found, try parsing the table
-	if totalTime == 0 {
-		for _, line := range lines {
-			if strings.Contains(line, "│") && !strings.Contains(line, "RANK") && !strings.Contains(line, "─") {
-				parts := strings.Split(line, "│")
-				if len(parts) >= 6 {
-					// Try to parse time (column 2)
-					timeStr := strings.TrimSpace(parts[2])
-					if d, err := time.ParseDuration(timeStr); err == nil {
-						totalTime = d
-					}
-
-					// Try to parse M rows/sec (column 3)
-					rowsStr := strings.TrimSpace(parts[3])
-					fmt.Sscanf(rowsStr, "%f", &rowsPerSec)
-					rowsPerSec *= 1_000_000 // Convert from M rows/sec to rows/sec
-
-					// Try to parse MB/sec (column 4)
-					mbStr := strings.TrimSpace(parts[4])
-					fmt.Sscanf(mbStr, "%f", &mbPerSec)
-
-					if totalTime > 0 && rowsPerSec > 0 {
+				// Try to parse Tasks/sec (column 4, index 3) - this is now a formatted number with commas
+				tasksStr := strings.TrimSpace(parts[4])
+				// Remove commas from the number
+				tasksStr = strings.ReplaceAll(tasksStr, ",", "")
+				if _, err := fmt.Sscanf(tasksStr, "%f", &tasksPerSec); err == nil {
+					if totalTime > 0 && tasksPerSec > 0 {
 						break
 					}
 				}
@@ -104,10 +75,10 @@ func parseStrategyOutput(output string) (time.Duration, float64, float64, error)
 	}
 
 	if totalTime == 0 {
-		return 0, 0, 0, fmt.Errorf("could not parse strategy output")
+		return 0, 0, fmt.Errorf("could not parse strategy output")
 	}
 
-	return totalTime, rowsPerSec, mbPerSec, nil
+	return totalTime, tasksPerSec, nil
 }
 
 func runSingleStrategy(strategy string, args []string) RunResult {
@@ -119,7 +90,7 @@ func runSingleStrategy(strategy string, args []string) RunResult {
 	// Build command arguments - use "." to include all package files (main.go, terminal_*.go)
 	cmdArgs := append([]string{"run", ".", "-strategy=" + strategy}, args...)
 
-	runnerYellow.Printf("  Running: %s\n", strategy)
+	_, _ = runnerYellow.Printf("  Running: %s\n", strategy)
 
 	cmd := exec.Command("go", cmdArgs...)
 	cmd.Dir = ".." // Run in parent directory where main.go is located
@@ -127,35 +98,33 @@ func runSingleStrategy(strategy string, args []string) RunResult {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		result.ErrorMsg = fmt.Sprintf("Command failed: %v\nOutput: %s", err, string(output))
-		runnerRed.Printf("    ✗ Failed: %v\n", err)
+		_, _ = runnerRed.Printf("    ✗ Failed: %v\n", err)
 		return result
 	}
 
-	// Parse the output to extract metrics
-	totalTime, rowsPerSec, mbPerSec, parseErr := parseStrategyOutput(string(output))
+	totalTime, tasksPerSec, parseErr := parseStrategyOutput(string(output))
 	if parseErr != nil {
 		result.ErrorMsg = fmt.Sprintf("Failed to parse output: %v", parseErr)
-		runnerRed.Printf("    ✗ Parse error: %v\n", parseErr)
+		_, _ = runnerRed.Printf("    ✗ Parse error: %v\n", parseErr)
 		return result
 	}
 
 	result.TotalTime = totalTime
-	result.ThroughputRowsPS = rowsPerSec
-	result.ThroughputMBps = mbPerSec
+	result.ThroughputRowsPS = tasksPerSec
 	result.Success = true
 
-	runnerGreen.Printf("    ✓ Completed in %v (%.1f M tasks/s)\n",
+	_, _ = runnerGreen.Printf("    ✓ Completed in %v (%s tasks/s)\n",
 		totalTime.Round(time.Millisecond),
-		rowsPerSec/1_000_000)
+		formatNumber(int(tasksPerSec)))
 
 	return result
 }
 
 func printRunnerResults(results []RunResult) {
 	fmt.Println()
-	runnerBold.Println("═══════════════════════════════════════════════════════════")
-	runnerBold.Println("📊 TASK THROUGHPUT RESULTS (Isolated Strategy Runs)")
-	runnerBold.Println("═══════════════════════════════════════════════════════════")
+	_, _ = runnerBold.Println("═══════════════════════════════════════════════════════════")
+	_, _ = runnerBold.Println("📊 TASK THROUGHPUT RESULTS (Isolated Strategy Runs)")
+	_, _ = runnerBold.Println("═══════════════════════════════════════════════════════════")
 	fmt.Println()
 
 	// Filter successful results and sort by time
@@ -167,7 +136,7 @@ func printRunnerResults(results []RunResult) {
 	}
 
 	if len(successfulResults) == 0 {
-		runnerRed.Println("No strategies completed successfully!")
+		_, _ = runnerRed.Println("No strategies completed successfully!")
 		return
 	}
 
@@ -183,7 +152,7 @@ func printRunnerResults(results []RunResult) {
 	fastestTime := successfulResults[0].TotalTime
 
 	table := tablewriter.NewWriter(os.Stdout)
-	table.Header("Rank", "Strategy", "Time", "M tasks/sec", "MB/sec", "vs Fastest")
+	table.Header("Rank", "Strategy", "Time", "Tasks/sec", "vs Fastest")
 
 	for _, r := range successfulResults {
 		rankIcon := fmt.Sprintf("%d", r.Rank)
@@ -202,17 +171,16 @@ func printRunnerResults(results []RunResult) {
 			vsFastestStr = "baseline"
 		}
 
-		table.Append(
+		_ = table.Append(
 			rankIcon,
 			r.Strategy,
 			r.TotalTime.Round(time.Millisecond).String(),
-			fmt.Sprintf("%.1f", r.ThroughputRowsPS/1_000_000),
-			fmt.Sprintf("%.1f", r.ThroughputMBps),
+			formatNumber(int(r.ThroughputRowsPS)),
 			vsFastestStr,
 		)
 	}
 
-	table.Render()
+	_ = table.Render()
 
 	// Print failed strategies if any
 	failedResults := make([]RunResult, 0)
@@ -224,14 +192,14 @@ func printRunnerResults(results []RunResult) {
 
 	if len(failedResults) > 0 {
 		fmt.Println()
-		runnerRed.Println("⚠️  Failed Strategies:")
+		_, _ = runnerRed.Println("⚠️  Failed Strategies:")
 		for _, r := range failedResults {
-			runnerRed.Printf("  • %s: %s\n", r.Strategy, r.ErrorMsg)
+			_, _ = runnerRed.Printf("  • %s: %s\n", r.Strategy, r.ErrorMsg)
 		}
 	}
 
 	fmt.Println()
-	runnerGreen.Printf("✅ Successfully tested %d/%d strategies\n", len(successfulResults), len(results))
+	_, _ = runnerGreen.Printf("✅ Successfully tested %d/%d strategies\n", len(successfulResults), len(results))
 	fmt.Println()
 }
 
@@ -255,41 +223,39 @@ func main() {
 	enableWindowsANSI()
 
 	// Parse flags that we want to pass through to the main program
-	totalRowsFlag := flag.Int("rows", 65_000_000, "Total number of tasks to process")
-	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect, max 8)")
-	chunkSizeFlag := flag.Int("chunk", 500, "Items per task chunk")
-	balancedFlag := flag.Bool("balanced", true, "Balanced mode: uniform-sized chunks")
+	tasksFlag := flag.Int("tasks", 100_000, "Number of tasks to process")
+	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect)")
+	complexityFlag := flag.Int("complexity", 10_000, "Base CPU work per task in iterations")
+	workloadFlag := flag.String("workload", "balanced", "Workload mode: 'balanced', 'imbalanced', or 'priority'")
 	iterationsFlag := flag.Int("iterations", 1, "Number of iterations per strategy")
 	warmupFlag := flag.Int("warmup", 0, "Number of warmup iterations")
-	priorityFlag := flag.Bool("priority", false, "Priority mode: reverse task order")
 	flag.Parse()
 
 	// Build arguments to pass to each strategy run
 	args := []string{
-		fmt.Sprintf("-rows=%d", *totalRowsFlag),
+		fmt.Sprintf("-tasks=%d", *tasksFlag),
 		fmt.Sprintf("-workers=%d", *workersFlag),
-		fmt.Sprintf("-chunk=%d", *chunkSizeFlag),
-		fmt.Sprintf("-balanced=%t", *balancedFlag),
+		fmt.Sprintf("-complexity=%d", *complexityFlag),
+		fmt.Sprintf("-workload=%s", *workloadFlag),
 		fmt.Sprintf("-iterations=%d", *iterationsFlag),
 		fmt.Sprintf("-warmup=%d", *warmupFlag),
-		fmt.Sprintf("-priority=%t", *priorityFlag),
 	}
 
-	runnerBold.Println("╔════════════════════════════════════════════════════════════╗")
-	runnerBold.Println("║       Task Throughput Benchmark - Strategy Comparison      ║")
-	runnerBold.Println("╚════════════════════════════════════════════════════════════╝")
+	_, _ = runnerBold.Println("╔════════════════════════════════════════════════════════════╗")
+	_, _ = runnerBold.Println("║       Task Throughput Benchmark - Strategy Comparison      ║")
+	_, _ = runnerBold.Println("╚════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 
-	runnerBlue.Println("⚙️  Configuration:")
+	_, _ = runnerBlue.Println("⚙️  Configuration:")
 	fmt.Printf("  Workers:          %d", *workersFlag)
 	if *workersFlag == 0 {
-		fmt.Printf(" (auto-detect, max 8 cores out of %d)\n", runtime.NumCPU())
+		fmt.Printf(" (auto-detect, using %d CPU cores)\n", runtime.NumCPU())
 	} else {
 		fmt.Println()
 	}
-	fmt.Printf("  Total Tasks:      %s tasks to process\n", formatNumber(*totalRowsFlag))
-	fmt.Printf("  Chunk Size:       %s items per task\n", formatNumber(*chunkSizeFlag))
-	fmt.Printf("  Balanced Mode:    %t\n", *balancedFlag)
+	fmt.Printf("  Tasks:            %s concurrent tasks\n", formatNumber(*tasksFlag))
+	fmt.Printf("  Complexity:       %s iterations per task\n", formatNumber(*complexityFlag))
+	fmt.Printf("  Workload:         %s\n", *workloadFlag)
 	fmt.Printf("  Iterations:       %d\n", *iterationsFlag)
 	if *warmupFlag > 0 {
 		fmt.Printf("  Warmup Runs:      %d\n", *warmupFlag)
@@ -298,19 +264,18 @@ func main() {
 
 	strategies := allStrategies
 
-	runnerBold.Printf("🚀 Testing %d scheduler strategies in isolated mode\n", len(strategies))
-	runnerYellow.Println("   (Each strategy runs in a separate process for fair comparison)")
+	_, _ = runnerBold.Printf("🚀 Testing %d scheduler strategies in isolated mode\n", len(strategies))
+	_, _ = runnerYellow.Println("   (Each strategy runs in a separate process for fair comparison)")
 	fmt.Println()
 
 	results := make([]RunResult, 0, len(strategies))
 
 	for i, strategy := range strategies {
-		runnerBlue.Printf("[%d/%d] ", i+1, len(strategies))
+		_, _ = runnerBlue.Printf("[%d/%d] ", i+1, len(strategies))
 		result := runSingleStrategy(strategy, args)
 		results = append(results, result)
 		fmt.Println()
 
-		// Small delay between runs to let system stabilize
 		if i < len(strategies)-1 {
 			time.Sleep(200 * time.Millisecond)
 		}

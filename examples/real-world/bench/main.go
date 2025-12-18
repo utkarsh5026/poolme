@@ -30,22 +30,16 @@ var (
 	}
 )
 
-// StationData represents a weather station's measurement batch (or chunk)
-type StationData struct {
-	StationName string
-	ChunkID     int    // Chunk number for this station
-	NumReadings int    // Number of readings in this chunk
-	Complexity  string // Tier: Huge, Large, Medium, Small, Tiny
-	StartIndex  int    // Starting index for seed offset
+// Task represents a unit of work with configurable CPU complexity
+type Task struct {
+	ID         int    // Task identifier
+	Complexity int    // CPU work units (iterations of math operations)
+	Weight     string // "Light", "Medium", "Heavy" (for display only)
 }
 
-// StationStats represents aggregated statistics for a station
-type StationStats struct {
-	StationName string
-	NumReadings int
-	MinTemp     float64
-	MaxTemp     float64
-	AvgTemp     float64
+// TaskResult represents the result of processing a task
+type TaskResult struct {
+	ID          int
 	ProcessTime time.Duration
 }
 
@@ -63,206 +57,82 @@ var (
 	red  = color.New(color.FgRed)
 )
 
-func processStation(_ context.Context, station StationData) (StationStats, error) {
+func processTask(_ context.Context, task Task) (TaskResult, error) {
 	start := time.Now()
-
-	minTemp := 100.0
-	maxTemp := -100.0
-	sumTemp := 0.0
-
-	state := uint64(hashString(station.StationName)) + uint64(station.StartIndex)
+	state := uint64(task.ID)
 	if state == 0 {
-		state = 1 // Xorshift must not be zero
+		state = 1
 	}
 
-	for i := 0; i < station.NumReadings; i++ {
-		// 2. Inline Xorshift Algorithm (High performance randomness)
+	result := 0.0
+	for i := 0; i < task.Complexity; i++ {
 		x := state
 		x ^= x << 13
 		x ^= x >> 17
 		x ^= x << 5
 		state = x
 
-		// 3. Convert uint64 to float range [-20, 40]
-		// This effectively replaces rng.Float64()*60 - 20
-		// We use the remainder to get a range [0, 600) then divide by 10 for decimal
-		// This avoids float multiplication overhead
-
-		// Optimize: (x % 600) gives 0-599. Subtract 200 gives -200 to 399. Divide by 10 gives -20.0 to 39.9
-		rawTemp := int(x % 600)             // 0 to 599
-		temp := float64(rawTemp-200) / 10.0 // -20.0 to 39.9
-
-		// (No math.Round needed because we constructed it from integers!)
-
-		if temp < minTemp {
-			minTemp = temp
-		}
-		if temp > maxTemp {
-			maxTemp = temp
-		}
-		sumTemp += temp
-
-		// Simulated heavy load (Keep this if you need to simulate CPU work)
-		if i%1000 == 0 {
-			_ = math.Sin(float64(i)) * math.Cos(temp)
+		if i%100 == 0 {
+			result += math.Sin(float64(x)) * math.Cos(float64(i))
 		}
 	}
-
-	avgTemp := sumTemp / float64(station.NumReadings)
-
-	return StationStats{
-		StationName: station.StationName,
-		NumReadings: station.NumReadings,
-		MinTemp:     minTemp,
-		MaxTemp:     maxTemp,
-		AvgTemp:     math.Round(avgTemp*10) / 10, // Round only once at the end
+	_ = result
+	return TaskResult{
+		ID:          task.ID,
 		ProcessTime: time.Since(start),
 	}, nil
 }
 
-func hashString(s string) int64 {
-	hash := int64(0)
-	for _, c := range s {
-		hash = hash*31 + int64(c)
+// generateBalancedTasks creates tasks with uniform complexity.
+// All tasks have the same CPU work, creating a perfectly balanced workload.
+func generateBalancedTasks(count int, complexity int) []Task {
+	tasks := make([]Task, count)
+	for i := range count {
+		tasks[i] = Task{
+			ID:         i,
+			Complexity: complexity,
+			Weight:     "Medium",
+		}
 	}
-	return hash
+	return tasks
 }
 
-// generateBalancedStationData creates uniform-sized chunks for all stations.
-// This creates a perfectly balanced workload where all tasks have the same size,
-// reducing the impact of workload imbalance on scheduler performance.
-//
-// chunkSize: Rows per task (all tasks will have this size except possibly the last)
-func generateBalancedStationData(totalRows int, chunkSize int) []StationData {
-	tasks := make([]StationData, 0)
-	stationNames := []string{
-		"Beijing", "Tokyo", "Delhi", "Shanghai", "Mumbai", "Cairo", "Moscow",
-		"London", "Paris", "Berlin", "Rome", "Madrid", "Amsterdam", "Brussels",
-		"Vienna", "Oslo", "Helsinki", "Stockholm", "Copenhagen", "Dublin",
-		"Lisbon", "Athens", "Warsaw", "Prague", "Budapest", "Reykjavik",
-		"Luxembourg", "Monaco", "Vaduz", "Andorra",
-	}
+// generateImbalancedTasks creates tasks with varying complexity.
+// This creates a realistic workload with different task sizes:
+// - 10% Heavy tasks (10x base complexity)
+// - 20% Medium tasks (5x base complexity)
+// - 70% Light tasks (1x base complexity)
+func generateImbalancedTasks(count int, baseComplexity int) []Task {
+	tasks := make([]Task, count)
+	heavyCount := count * 10 / 100
+	mediumCount := count * 20 / 100
 
-	numChunks := (totalRows + chunkSize - 1) / chunkSize
-	stationIdx := 0
+	for i := range count {
+		task := Task{ID: i}
 
-	for chunkID := range numChunks {
-		startIdx := chunkID * chunkSize
-		endIdx := min((chunkID+1)*chunkSize, totalRows)
-		chunkRows := endIdx - startIdx
-
-		if chunkRows <= 0 {
-			continue
+		if i < heavyCount {
+			task.Complexity = baseComplexity * 10
+			task.Weight = "Heavy"
+		} else if i < heavyCount+mediumCount {
+			task.Complexity = baseComplexity * 5
+			task.Weight = "Medium"
+		} else {
+			task.Complexity = baseComplexity
+			task.Weight = "Light"
 		}
 
-		stationName := stationNames[stationIdx%len(stationNames)]
-		stationIdx++
-
-		tasks = append(tasks, StationData{
-			StationName: stationName,
-			ChunkID:     chunkID,
-			NumReadings: chunkRows,
-			Complexity:  "Uniform",
-			StartIndex:  startIdx,
-		})
+		tasks[i] = task
 	}
 
 	return tasks
 }
 
-// generateStationData creates chunked station data for true parallel testing.
-// Instead of 30 large tasks, this creates many smaller chunks to stress-test schedulers.
-//
-// Distribution maintains same percentages:
-// - HUGE stations: 68% of total data (3 stations)
-// - Large stations: 27% of total data (4 stations)
-// - Medium stations: 4% of total data (8 stations)
-// - Small/Tiny stations: 1% of total data (15 stations)
-//
-// chunkSize: Max rows per task (e.g., 50000 = 50K rows per task)
-func generateStationData(totalRows int, chunkSize int) []StationData {
-	stationDistribution := []struct {
-		name    string
-		percent float64
-		tier    string
-	}{
-		// HUGE stations - 68% total
-		{"Beijing", 22.77, "Huge"},
-		{"Tokyo", 18.22, "Huge"},
-		{"Delhi", 27.32, "Huge"},
-
-		// Large stations - 27% total
-		{"Shanghai", 7.59, "Large"},
-		{"Mumbai", 6.83, "Large"},
-		{"Cairo", 5.77, "Large"},
-		{"Moscow", 6.38, "Large"},
-
-		// Medium stations - 4% total
-		{"London", 0.68, "Medium"},
-		{"Paris", 0.58, "Medium"},
-		{"Berlin", 0.64, "Medium"},
-		{"Rome", 0.53, "Medium"},
-		{"Madrid", 0.59, "Medium"},
-		{"Amsterdam", 0.43, "Medium"},
-		{"Brussels", 0.47, "Medium"},
-		{"Vienna", 0.52, "Medium"},
-
-		// Small/Tiny stations - 1% total
-		{"Oslo", 0.068, "Small"},
-		{"Helsinki", 0.058, "Small"},
-		{"Stockholm", 0.064, "Small"},
-		{"Copenhagen", 0.062, "Small"},
-		{"Dublin", 0.053, "Small"},
-		{"Lisbon", 0.059, "Small"},
-		{"Athens", 0.067, "Small"},
-		{"Warsaw", 0.061, "Small"},
-		{"Prague", 0.056, "Small"},
-		{"Budapest", 0.055, "Small"},
-		{"Reykjavik", 0.018, "Tiny"},
-		{"Luxembourg", 0.023, "Tiny"},
-		{"Monaco", 0.012, "Tiny"},
-		{"Vaduz", 0.014, "Tiny"},
-		{"Andorra", 0.017, "Tiny"},
-	}
-
-	tasks := make([]StationData, 0)
-
-	for _, dist := range stationDistribution {
-		stationRows := int(float64(totalRows) * dist.percent / 100.0)
-
-		numChunks := (stationRows + chunkSize - 1) / chunkSize //
-		if numChunks == 0 {
-			numChunks = 1
-		}
-
-		for chunkID := 0; chunkID < numChunks; chunkID++ {
-			startIdx := chunkID * chunkSize
-			endIdx := min((chunkID+1)*chunkSize, stationRows)
-			chunkRows := endIdx - startIdx
-
-			if chunkRows <= 0 {
-				continue
-			}
-
-			tasks = append(tasks, StationData{
-				StationName: dist.name,
-				ChunkID:     chunkID,
-				NumReadings: chunkRows,
-				Complexity:  dist.tier,
-				StartIndex:  startIdx,
-			})
-		}
-	}
-
-	return tasks
-}
-
-// generatePriorityStationData creates tasks ordered to test priority reordering.
-// It generates data using the imbalanced distribution, then reverses the order
-// so that small tasks are submitted first and large tasks last.
-func generatePriorityStationData(totalRows int, chunkSize int) []StationData {
-	tasks := generateStationData(totalRows, chunkSize)
-	slices.Reverse(tasks) // Submit small first, large last
+// generatePriorityTasks creates imbalanced tasks in reversed order.
+// Light tasks are submitted first, heavy tasks last.
+// This tests if priority-based schedulers can reorder tasks for better performance.
+func generatePriorityTasks(count int, baseComplexity int) []Task {
+	tasks := generateImbalancedTasks(count, baseComplexity)
+	slices.Reverse(tasks) // Submit light first, heavy last
 	return tasks
 }
 
@@ -281,14 +151,14 @@ func formatNumber(n int) string {
 type Runner struct {
 	strategy   string
 	numWorkers int
-	stations   []StationData
+	tasks      []Task
 }
 
-func newRunner(strategyName string, stations []StationData, numWorkers int) *Runner {
+func newRunner(strategyName string, tasks []Task, numWorkers int) *Runner {
 	return &Runner{
 		strategy:   strategyName,
 		numWorkers: numWorkers,
-		stations:   stations,
+		tasks:      tasks,
 	}
 }
 
@@ -299,7 +169,7 @@ func (r *Runner) Run(bar *progressbar.ProgressBar) StrategyResult {
 
 	// Process all tasks using the batch Process method
 	// This handles submission and result collection internally, avoiding deadlocks
-	_, err := wPool.Process(ctx, r.stations, processStation)
+	_, err := wPool.Process(ctx, r.tasks, processTask)
 	if err != nil {
 		_, _ = red.Printf("Error processing %s: %v\n", r.strategy, err)
 		return StrategyResult{Name: r.strategy}
@@ -311,59 +181,55 @@ func (r *Runner) Run(bar *progressbar.ProgressBar) StrategyResult {
 		_ = bar.Add(1)
 	}
 
-	totalRows := 0
-	for _, s := range r.stations {
-		totalRows += s.NumReadings
-	}
-
-	throughputRows := float64(totalRows) / elapsed.Seconds()
+	taskCount := len(r.tasks)
+	throughputTasksPS := float64(taskCount) / elapsed.Seconds()
 
 	return StrategyResult{
 		Name:             r.strategy,
 		TotalTime:        elapsed,
 		ThroughputMBps:   0,
-		ThroughputRowsPS: throughputRows,
+		ThroughputRowsPS: throughputTasksPS,
 	}
 }
 
-func (r *Runner) selectStrategy() *pool.WorkerPool[StationData, StationStats] {
+func (r *Runner) selectStrategy() *pool.WorkerPool[Task, TaskResult] {
 	switch r.strategy {
 	case "Work-Stealing":
-		return pool.NewWorkerPool[StationData, StationStats](
+		return pool.NewWorkerPool[Task, TaskResult](
 			pool.WithWorkerCount(r.numWorkers),
 			pool.WithWorkStealing(),
 		)
 	case "MPMC Queue":
-		return pool.NewWorkerPool[StationData, StationStats](
+		return pool.NewWorkerPool[Task, TaskResult](
 			pool.WithWorkerCount(r.numWorkers),
 			pool.WithMPMCQueue(),
 		)
 	case "Priority Queue":
-		return pool.NewWorkerPool[StationData, StationStats](
+		return pool.NewWorkerPool[Task, TaskResult](
 			pool.WithWorkerCount(r.numWorkers),
-			pool.WithPriorityQueue(func(a, b StationData) bool {
-				return a.NumReadings > b.NumReadings
+			pool.WithPriorityQueue(func(a, b Task) bool {
+				return a.Complexity > b.Complexity
 			}),
 		)
 	case "Skip List":
-		return pool.NewWorkerPool[StationData, StationStats](
+		return pool.NewWorkerPool[Task, TaskResult](
 			pool.WithWorkerCount(r.numWorkers),
-			pool.WithSkipList(func(a, b StationData) bool {
-				return a.NumReadings > b.NumReadings
+			pool.WithSkipList(func(a, b Task) bool {
+				return a.Complexity > b.Complexity
 			}),
 		)
 	case "Bitmask":
-		return pool.NewWorkerPool[StationData, StationStats](
+		return pool.NewWorkerPool[Task, TaskResult](
 			pool.WithWorkerCount(r.numWorkers),
 			pool.WithBitmask(),
 		)
 	case "LMAX Disruptor":
-		return pool.NewWorkerPool[StationData, StationStats](
+		return pool.NewWorkerPool[Task, TaskResult](
 			pool.WithWorkerCount(r.numWorkers),
 			pool.WithLmax(),
 		)
 	default:
-		return pool.NewWorkerPool[StationData, StationStats](
+		return pool.NewWorkerPool[Task, TaskResult](
 			pool.WithWorkerCount(r.numWorkers),
 		)
 	}
@@ -445,13 +311,13 @@ func printResults(results []StrategyResult) {
 
 func printComparisonTable(results []StrategyResult) {
 	fmt.Println()
-	bold.Println("📊 TASK THROUGHPUT RESULTS - Strategy Comparison")
+	_, _ = bold.Println("📊 SCHEDULER PERFORMANCE - Tasks/Second")
 	fmt.Println()
 
 	fastestTime := results[0].TotalTime
 
 	table := tablewriter.NewWriter(os.Stdout)
-	table.Header("Rank", "Strategy", "Time", "M tasks/sec", "MB/sec", "vs Fastest")
+	table.Header("Rank", "Scheduler", "Time", "Tasks/sec", "vs Fastest")
 
 	for _, r := range results {
 		rankIcon := fmt.Sprintf("%d", r.Rank)
@@ -474,8 +340,7 @@ func printComparisonTable(results []StrategyResult) {
 			rankIcon,
 			r.Name,
 			r.TotalTime.Round(time.Millisecond).String(),
-			fmt.Sprintf("%.1f", r.ThroughputRowsPS/1_000_000),
-			fmt.Sprintf("%.1f", r.ThroughputMBps),
+			formatNumber(int(r.ThroughputRowsPS)),
 			vsFastestStr,
 		)
 	}
@@ -483,27 +348,26 @@ func printComparisonTable(results []StrategyResult) {
 	_ = table.Render()
 }
 
-func printConfiguration(numWorkers int, totalRows int, numTasks int, chunkSize int, balanced bool) {
+func printConfiguration(numWorkers int, numTasks int, complexity int, workload string) {
 	_, _ = bold.Println("⚙️  Configuration:")
-	fmt.Printf("  Workers:          %d (using %d CPU cores)\n", numWorkers, runtime.NumCPU())
-	fmt.Printf("  Strategies:       7 different scheduling algorithms\n")
-	fmt.Printf("  Total Items:      %s items to process\n", formatNumber(totalRows))
-	fmt.Printf("  Chunk Size:       %s items per task\n", formatNumber(chunkSize))
-	if balanced {
-		fmt.Printf("  Mode:             BALANCED (uniform task sizes)\n")
-	} else {
-		fmt.Printf("  Mode:             IMBALANCED (realistic workload)\n")
-	}
+	fmt.Printf("  Workers:    %d (using %d CPU cores)\n", numWorkers, runtime.NumCPU())
+	fmt.Printf("  Tasks:      %s concurrent tasks\n", formatNumber(numTasks))
+	fmt.Printf("  Complexity: %s iterations per task\n", formatNumber(complexity))
+	fmt.Printf("  Workload:   %s\n", workload)
+	fmt.Printf("  Strategies: 7 schedulers\n")
 	fmt.Println()
 
-	_, _ = bold.Println("📊 Workload Details:")
-	fmt.Printf("  • %s concurrent tasks submitted to scheduler\n", formatNumber(numTasks))
-	fmt.Printf("  • %s total items to process\n", formatNumber(totalRows))
-	if !balanced {
-		fmt.Printf("  • 3 HUGE tasks (68%% of workload) → %s tasks\n", formatNumber(numTasks*68/100))
-		fmt.Printf("  • 27 smaller tasks (32%% of workload) → %s tasks\n", formatNumber(numTasks*32/100))
-	} else {
-		fmt.Printf("  • All tasks have uniform size (~%s items each)\n", formatNumber(chunkSize))
+	_, _ = bold.Println("📊 Workload Distribution:")
+	switch workload {
+	case "balanced":
+		fmt.Printf("  • All %s tasks have equal complexity (%s iterations)\n", formatNumber(numTasks), formatNumber(complexity))
+	case "imbalanced":
+		fmt.Printf("  • 10%% Heavy tasks (%s tasks × %s iterations)\n", formatNumber(numTasks*10/100), formatNumber(complexity*10))
+		fmt.Printf("  • 20%% Medium tasks (%s tasks × %s iterations)\n", formatNumber(numTasks*20/100), formatNumber(complexity*5))
+		fmt.Printf("  • 70%% Light tasks (%s tasks × %s iterations)\n", formatNumber(numTasks*70/100), formatNumber(complexity))
+	case "priority":
+		fmt.Printf("  • Imbalanced workload submitted in reversed order (light → heavy)\n")
+		fmt.Printf("  • Tests if priority schedulers reorder tasks effectively\n")
 	}
 	fmt.Println()
 }
@@ -550,14 +414,13 @@ func main() {
 	// Enable ANSI escape sequences on Windows for progress bar support
 	enableWindowsANSI()
 
-	totalRowsFlag := flag.Int("rows", 65_000_000, "Total number of tasks to process (e.g., 100000000 for 100M tasks)")
+	tasksFlag := flag.Int("tasks", 100_000, "Number of tasks to process (default: 100,000)")
 	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect, max 8)")
-	chunkSizeFlag := flag.Int("chunk", 500, "Items per task chunk (smaller = more concurrent tasks, default 500)")
-	balancedFlag := flag.Bool("balanced", true, "Balanced mode: generate uniform-sized chunks to reduce workload imbalance")
+	complexityFlag := flag.Int("complexity", 10_000, "Base CPU work per task in iterations (default: 10,000)")
+	workloadFlag := flag.String("workload", "balanced", "Workload mode: 'balanced' (all tasks equal), 'imbalanced' (varied task sizes), or 'priority' (reversed order)")
 	strategyFlag := flag.String("strategy", "", "Run a specific scheduler strategy (e.g., 'Work-Stealing', 'MPMC Queue'). If empty, runs all strategies")
 	iterationsFlag := flag.Int("iterations", 1, "Number of iterations to run per strategy (for statistical analysis)")
 	warmupFlag := flag.Int("warmup", 0, "Number of warmup iterations before measurement")
-	priorityFlag := flag.Bool("priority", false, "Priority mode: reverse task order to test priority-based schedulers reordering tasks")
 	cpuProfileFlag := flag.String("cpuprofile", "", "Write CPU profile to file")
 	memProfileFlag := flag.String("memprofile", "", "Write memory profile to file")
 	flag.Parse()
@@ -604,21 +467,19 @@ func main() {
 	}
 
 	numWorkers := min(runtime.NumCPU(), *workersFlag)
-	var tasks []StationData
-	if *priorityFlag {
-		tasks = generatePriorityStationData(*totalRowsFlag, *chunkSizeFlag)
-	} else if *balancedFlag {
-		tasks = generateBalancedStationData(*totalRowsFlag, *chunkSizeFlag)
-	} else {
-		tasks = generateStationData(*totalRowsFlag, *chunkSizeFlag)
+
+	// Generate tasks based on workload mode
+	var tasks []Task
+	switch *workloadFlag {
+	case "priority":
+		tasks = generatePriorityTasks(*tasksFlag, *complexityFlag)
+	case "imbalanced":
+		tasks = generateImbalancedTasks(*tasksFlag, *complexityFlag)
+	default: // "balanced"
+		tasks = generateBalancedTasks(*tasksFlag, *complexityFlag)
 	}
 
-	totalRows := 0
-	for _, task := range tasks {
-		totalRows += task.NumReadings
-	}
-
-	printConfiguration(numWorkers, totalRows, len(tasks), *chunkSizeFlag, *balancedFlag)
+	printConfiguration(numWorkers, len(tasks), *complexityFlag, *workloadFlag)
 
 	strategies := getStrategiesToRun(*strategyFlag, *iterationsFlag, *warmupFlag)
 
