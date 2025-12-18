@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/utkarsh5026/poolme/internal/types"
 )
@@ -190,7 +191,6 @@ type workSteal[T any, R any] struct {
 	globalQueue               *mpmcQueue[*types.SubmittedTask[T, R]]
 	workerQueues              []*wsDeque[T, R]
 	conf                      *ProcessorConfig[T, R]
-	stealSeed                 atomic.Uint64 // Round-robin counter for task distribution
 	workerCount, maxLocalSize int
 	quit                      *workerSignal
 	runner                    *workerRunner[T, R]
@@ -250,6 +250,8 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 	localQueue := s.workerQueues[workerID]
 	var missCount, globalCounter int
 
+	rngState := uint64(time.Now().UnixNano()) + uint64(workerID) + 1
+
 	drain := func() {
 		s.drain(ctx, localQueue, executor, h)
 	}
@@ -305,7 +307,7 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 			continue
 		}
 
-		if t := s.steal(int(workerID)); t != nil {
+		if t := s.steal(int(workerID), &rngState); t != nil {
 			if err := executeTask(t); err != nil {
 				return err
 			}
@@ -344,14 +346,20 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 // Uses randomized victim selection to reduce contention.
 // Steals from the front (FIFO) to minimize contention with the victim
 // who is popping from the back (LIFO).
-func (s *workSteal[T, R]) steal(thiefID int) *types.SubmittedTask[T, R] {
+func (s *workSteal[T, R]) steal(thiefID int, rngState *uint64) *types.SubmittedTask[T, R] {
 	n := s.workerCount
 	if n <= 1 {
 		return nil
 	}
 
+	x := *rngState
+	x ^= x << 13
+	x ^= x >> 17
+	x ^= x << 5
+	*rngState = x
+	startIndex := int(x % uint64(n))
+
 	maxAttempts := min(n-1, maxStealAttempts)
-	startIndex := int(s.stealSeed.Add(1) % uint64(n)) // #nosec G115 -- n is workerCount which is always positive
 	thiefQueue := s.workerQueues[thiefID]
 
 	for i := range maxAttempts {
@@ -360,18 +368,18 @@ func (s *workSteal[T, R]) steal(thiefID int) *types.SubmittedTask[T, R] {
 			continue
 		}
 
-		victimQueue := s.workerQueues[victimID]
-		n := victimQueue.Len()
+		vqueue := s.workerQueues[victimID]
+		n := vqueue.Len()
 		if n > batchStealSize*2 {
 			stealCount := min(n/2, batchStealSize)
 
-			firstTask := victimQueue.PopFront()
+			firstTask := vqueue.PopFront()
 			if firstTask == nil {
 				continue
 			}
 
 			for range stealCount - 1 {
-				if t := victimQueue.PopFront(); t != nil {
+				if t := vqueue.PopFront(); t != nil {
 					thiefQueue.PushBack(t)
 				}
 			}
@@ -380,7 +388,7 @@ func (s *workSteal[T, R]) steal(thiefID int) *types.SubmittedTask[T, R] {
 		}
 
 		if n > 0 {
-			if t := victimQueue.PopFront(); t != nil {
+			if t := vqueue.PopFront(); t != nil {
 				return t
 			}
 		}
