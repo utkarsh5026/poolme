@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"slices"
 	"sort"
 	"time"
@@ -556,10 +557,46 @@ func main() {
 	warmupFlag := flag.Int("warmup", 0, "Number of warmup iterations before measurement")
 	priorityFlag := flag.Bool("priority", false, "Priority mode: reverse task order to test priority-based schedulers reordering tasks")
 	burstFlag := flag.Bool("burst", false, "Burst mode: submit tasks in waves to test backpressure handling (future use)")
+	cpuProfileFlag := flag.String("cpuprofile", "", "Write CPU profile to file")
+	memProfileFlag := flag.String("memprofile", "", "Write memory profile to file")
 	flag.Parse()
 
 	ciMode := isCIMode(*ciModeFlag)
 	_ = *plainModeFlag
+
+	// Setup CPU profiling if requested
+	if *cpuProfileFlag != "" {
+		f, err := os.Create(*cpuProfileFlag)
+		if err != nil {
+			red.Printf("Error creating CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			red.Printf("Error starting CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
+		fmt.Printf("CPU profiling enabled, writing to: %s\n", *cpuProfileFlag)
+	}
+
+	var memProfileFile *os.File
+	if *memProfileFlag != "" {
+		var err error
+		memProfileFile, err = os.Create(*memProfileFlag)
+		if err != nil {
+			red.Printf("Error creating memory profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer func() {
+			runtime.GC()
+			if err := pprof.WriteHeapProfile(memProfileFile); err != nil {
+				red.Printf("Error writing memory profile: %v\n", err)
+			}
+			memProfileFile.Close()
+		}()
+		fmt.Printf("Memory profiling enabled, writing to: %s\n", *memProfileFlag)
+	}
 
 	numWorkers := *workersFlag
 	if numWorkers == 0 {
