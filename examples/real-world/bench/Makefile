@@ -3,7 +3,7 @@
 # Variables
 GO=go
 PROFILE_DIR=profiles
-PROFILE_ROWS?=10000000
+PROFILE_ROWS?=50000000
 PROFILE_CHUNK?=5000
 PROFILE_PORT?=8080
 
@@ -54,7 +54,7 @@ help:
 	@echo "  make profile-clean                - Clean all profile files"
 	@echo ""
 	@echo "$(YELLOW)Configuration (environment variables):$(NC)"
-	@echo "  PROFILE_ROWS=$(PROFILE_ROWS)    - Number of rows to process"
+	@echo "  PROFILE_ROWS=$(PROFILE_ROWS)   - Number of rows to process"
 	@echo "  PROFILE_CHUNK=$(PROFILE_CHUNK)   - Chunk size"
 	@echo "  PROFILE_PORT=$(PROFILE_PORT)     - Port for pprof web UI"
 	@echo ""
