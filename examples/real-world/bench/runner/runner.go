@@ -258,12 +258,10 @@ func main() {
 	totalRowsFlag := flag.Int("rows", 65_000_000, "Total number of tasks to process")
 	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect, max 8)")
 	chunkSizeFlag := flag.Int("chunk", 500, "Items per task chunk")
-	ciModeFlag := flag.Bool("ci", false, "CI mode: disable progress bar and animations")
 	balancedFlag := flag.Bool("balanced", true, "Balanced mode: uniform-sized chunks")
 	iterationsFlag := flag.Int("iterations", 1, "Number of iterations per strategy")
 	warmupFlag := flag.Int("warmup", 0, "Number of warmup iterations")
 	priorityFlag := flag.Bool("priority", false, "Priority mode: reverse task order")
-	burstFlag := flag.Bool("burst", false, "Burst mode: submit in waves")
 	flag.Parse()
 
 	// Build arguments to pass to each strategy run
@@ -275,12 +273,6 @@ func main() {
 		fmt.Sprintf("-iterations=%d", *iterationsFlag),
 		fmt.Sprintf("-warmup=%d", *warmupFlag),
 		fmt.Sprintf("-priority=%t", *priorityFlag),
-		fmt.Sprintf("-burst=%t", *burstFlag),
-		"-ci=true", // Always run in CI mode for cleaner output
-	}
-
-	if *ciModeFlag {
-		args = append(args, "-ci=true")
 	}
 
 	runnerBold.Println("╔════════════════════════════════════════════════════════════╗")
