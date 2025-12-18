@@ -1,4 +1,4 @@
-.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet gosec install demo demo-billion
+.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet gosec install bench-uniform bench-skewed bench-priority bench-burst bench-small-pool bench-all
 
 # Variables
 BINARY_NAME=poolme
@@ -51,12 +51,13 @@ help:
 	@echo "  make gosec             - Run gosec security scanner"
 	@echo "  make check             - Run fmt, vet, lint, and gosec"
 	@echo ""
-	@echo "$(GREEN)Examples:$(NC)"
-	@echo "  make demo              - Run ALL real-world demos"
-	@echo "  make demo-billion      - Billion rows challenge (65M rows, 300M+ rows/sec)"
-	@echo "  make demo-billion-small - Quick test with 5M rows"
-	@echo "  make demo-billion-large - Large test with 100M rows"
-	@echo "  make demo-billion-stress - Run multiple times to verify stability"
+	@echo "$(GREEN)Benchmark Scenarios (Workload Comparisons):$(NC)"
+	@echo "  make bench-uniform      - Scenario 1: Uniform throughput (1B tasks)"
+	@echo "  make bench-skewed       - Scenario 2: Skewed workload (Work-Stealing test)"
+	@echo "  make bench-priority     - Scenario 3: Priority ordering (100M tasks)"
+	@echo "  make bench-burst        - Scenario 4: Burst traffic backpressure"
+	@echo "  make bench-small-pool   - Scenario 5: Small worker pool (4 workers)"
+	@echo "  make bench-all          - Run all 5 benchmark scenarios"
 	@echo ""
 	@echo "$(GREEN)Utilities:$(NC)"
 	@echo "  make clean             - Clean build artifacts and test cache"
@@ -214,77 +215,84 @@ tidy:
 	$(GOMOD) tidy
 	@echo "$(GREEN)Modules tidied!$(NC)"
 
-## demo: Run ALL real-world demos
-demo:
+
+## ═══════════════════════════════════════════════════════════
+## Benchmark Scenarios - Different workload patterns to show strategy strengths
+## ═══════════════════════════════════════════════════════════
+
+## bench-uniform: Scenario 1 - Uniform high-throughput baseline (1B tasks)
+bench-uniform:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║         Running ALL Work-Stealing Real-World Demos         ║$(NC)"
+	@echo "$(BLUE)║  Scenario 1: Uniform High-Throughput Baseline             ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@$(MAKE) demo-billion
+	@echo "$(YELLOW)📊 Workload: 1B tasks, all identical size (pure throughput)$(NC)"
+	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true
+	@echo ""
+
+## bench-skewed: Scenario 2 - Highly skewed workload (1B tasks)
+bench-skewed:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  Scenario 2: Highly Skewed Workload (Load Balancing)      ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 68%% in 3 huge tasks, extreme load imbalance$(NC)"
+	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 1000000000 -chunk 5000 -balanced=false
+	@echo ""
+
+## bench-priority: Scenario 3 - Priority-ordered processing (100M tasks)
+bench-priority:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  Scenario 3: Priority-Ordered Processing                  ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 100M tasks, reverse order (test priority reordering)$(NC)"
+	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 100000000 -chunk 1000 -balanced=false -priority=true
+	@echo ""
+
+## bench-burst: Scenario 4 - Burst traffic with backpressure (500M tasks)
+bench-burst:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  Scenario 4: Burst Traffic with Backpressure              ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 500M tasks in waves (bursty traffic pattern)$(NC)"
+	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 500000000 -chunk 500 -balanced=true -burst=true
+	@echo ""
+
+## bench-small-pool: Scenario 5 - Small worker pool (1B tasks, 4 workers)
+bench-small-pool:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  Scenario 5: Small Worker Pool Efficiency                 ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 1B tasks with only 4 workers (minimal overhead)$(NC)"
+	@cd examples/real-world/billion_rows/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true -workers=4
+	@echo ""
+
+## bench-all: Run all 5 benchmark scenarios sequentially
+bench-all:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║        Running All 5 Scheduler Benchmark Scenarios         ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@$(MAKE) bench-uniform
 	@echo ""
 	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
 	@echo ""
-
-## demo-billion: Run the billion rows challenge demo with default 65M rows
-demo-billion:
-	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║              Billion Rows Challenge Demo                   ║$(NC)"
-	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@$(MAKE) bench-skewed
 	@echo ""
-	@echo "$(YELLOW)🌡️  Processing 65 million temperature measurements$(NC)"
-	@echo "$(YELLOW)   Expected: 250-400M rows/sec, completes in under 1 second!$(NC)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
 	@echo ""
-	@cd examples/real-world/billion_rows && $(GO) run .
+	@$(MAKE) bench-priority
 	@echo ""
-	@echo "$(GREEN)✅ Billion rows demo complete!$(NC)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
 	@echo ""
-	@echo "$(BLUE)📝 Next Steps:$(NC)"
-	@echo "  • Try: make demo-billion-large (1B rows)"
-	@echo "  • Try: make demo-billion-stress (stability test)"
+	@$(MAKE) bench-burst
 	@echo ""
-
-## demo-billion-small: Run with 5M rows for quick testing
-demo-billion-small:
-	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║         Billion Rows Challenge - Quick Test (5M)           ║$(NC)"
-	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
 	@echo ""
-	@echo "$(YELLOW)🌡️  Processing 5 million temperature measurements$(NC)"
-	@echo "$(YELLOW)   Quick test to verify all strategies work correctly$(NC)"
+	@$(MAKE) bench-small-pool
 	@echo ""
-	@cd examples/real-world/billion_rows && $(GO) run . -rows 5000000
-	@echo ""
-	@echo "$(GREEN)✅ Quick test complete!$(NC)"
-	@echo ""
-
-## demo-billion-large: Run with 100M rows for comprehensive benchmark
-demo-billion-large:
-	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║     Billion Rows Challenge - Large Scale (1B)              ║$(NC)"
-	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
-	@echo ""
-	@echo "$(YELLOW)🌡️  Processing 1 Billion temperature measurements$(NC)"
-	@echo "$(YELLOW)   Large-scale test - may take 2-3 seconds$(NC)"
-	@echo ""
-	@cd examples/real-world/billion_rows && $(GO) run . -rows 1000000000
-	@echo ""
-	@echo "$(GREEN)✅ Large-scale benchmark complete!$(NC)"
-	@echo ""
-
-## demo-billion-stress: Run multiple times to verify stability
-demo-billion-stress:
-	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║         Billion Rows Challenge - Stability Test            ║$(NC)"
-	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
-	@echo ""
-	@echo "$(YELLOW)Running 3 iterations with 5M rows each$(NC)"
-	@echo "$(YELLOW)This verifies no deadlocks or race conditions$(NC)"
-	@echo ""
-	@for i in 1 2 3; do \
-		echo "$(YELLOW)━━━ Iteration $$i/3 ━━━$(NC)"; \
-		cd examples/real-world/billion_rows && $(GO) run . -rows 5000000 || exit 1; \
-		echo ""; \
-	done
-	@echo "$(GREEN)✅ All iterations completed successfully!$(NC)"
-	@echo "$(GREEN)   No deadlocks detected - the fix works!$(NC)"
+	@echo "$(GREEN)✅ All 5 benchmark scenarios complete!$(NC)"
 	@echo ""

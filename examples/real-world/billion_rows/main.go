@@ -244,6 +244,15 @@ func generateStationData(totalRows int, chunkSize int) []StationData {
 	return tasks
 }
 
+// generatePriorityStationData creates tasks ordered to test priority reordering.
+// It generates data using the imbalanced distribution, then reverses the order
+// so that small tasks are submitted first and large tasks last.
+func generatePriorityStationData(totalRows int, chunkSize int) []StationData {
+	tasks := generateStationData(totalRows, chunkSize)
+	slices.Reverse(tasks) // Submit small first, large last
+	return tasks
+}
+
 func formatNumber(n int) string {
 	s := fmt.Sprintf("%d", n)
 	result := ""
@@ -430,13 +439,13 @@ func printResults(results []StrategyResult) {
 
 func printComparisonTable(results []StrategyResult) {
 	fmt.Println()
-	bold.Println("📊 RESULTS - All Strategies Compared")
+	bold.Println("📊 TASK THROUGHPUT RESULTS - Strategy Comparison")
 	fmt.Println()
 
 	fastestTime := results[0].TotalTime
 
 	table := tablewriter.NewWriter(os.Stdout)
-	table.Header("Rank", "Strategy", "Time", "M rows/sec", "MB/sec", "vs Fastest")
+	table.Header("Rank", "Strategy", "Time", "M tasks/sec", "MB/sec", "vs Fastest")
 
 	for _, r := range results {
 		rankIcon := fmt.Sprintf("%d", r.Rank)
@@ -472,8 +481,8 @@ func printConfiguration(numWorkers int, totalRows int, totalSizeMB float64, numT
 	bold.Println("⚙️  Configuration:")
 	fmt.Printf("  Workers:          %d (using %d CPU cores)\n", numWorkers, runtime.NumCPU())
 	fmt.Printf("  Strategies:       7 different scheduling algorithms\n")
-	fmt.Printf("  Dataset:          %s temperature readings\n", formatNumber(totalRows))
-	fmt.Printf("  Chunk Size:       %s rows per task\n", formatNumber(chunkSize))
+	fmt.Printf("  Total Items:      %s items to process\n", formatNumber(totalRows))
+	fmt.Printf("  Chunk Size:       %s items per task\n", formatNumber(chunkSize))
 	if balanced {
 		fmt.Printf("  Mode:             BALANCED (uniform task sizes)\n")
 	} else {
@@ -482,14 +491,14 @@ func printConfiguration(numWorkers int, totalRows int, totalSizeMB float64, numT
 	fmt.Println()
 
 	bold.Println("📊 Workload Details:")
-	fmt.Printf("  • %s total tasks submitted to scheduler\n", formatNumber(numTasks))
-	fmt.Printf("  • %s total measurements to process\n", formatNumber(totalRows))
-	fmt.Printf("  • %.1f GB of data\n", totalSizeMB/1024)
+	fmt.Printf("  • %s concurrent tasks submitted to scheduler\n", formatNumber(numTasks))
+	fmt.Printf("  • %s total items to process\n", formatNumber(totalRows))
+	fmt.Printf("  • %.1f GB simulated data size\n", totalSizeMB/1024)
 	if !balanced {
-		fmt.Printf("  • 3 HUGE stations (68%% of data) → %s tasks\n", formatNumber(numTasks*68/100))
-		fmt.Printf("  • 27 smaller stations (32%% of data) → %s tasks\n", formatNumber(numTasks*32/100))
+		fmt.Printf("  • 3 HUGE tasks (68%% of workload) → %s tasks\n", formatNumber(numTasks*68/100))
+		fmt.Printf("  • 27 smaller tasks (32%% of workload) → %s tasks\n", formatNumber(numTasks*32/100))
 	} else {
-		fmt.Printf("  • All tasks have uniform size (~%s rows each)\n", formatNumber(chunkSize))
+		fmt.Printf("  • All tasks have uniform size (~%s items each)\n", formatNumber(chunkSize))
 	}
 	fmt.Println()
 }
@@ -502,7 +511,7 @@ func getStrategiesToRun(isolated string, iterations int, warmup int) []string {
 			fmt.Println("Available strategies:", allStrategies)
 			os.Exit(1)
 		}
-		fmt.Printf("🔬 ISOLATED MODE: Testing only '%s'\n", isolated)
+		fmt.Printf("🔬 SINGLE STRATEGY MODE: Testing '%s' scheduler\n", isolated)
 		if iterations > 1 {
 			fmt.Printf("  Running %d iterations with %d warmup runs\n", iterations, warmup)
 		}
@@ -536,15 +545,17 @@ func main() {
 	// Enable ANSI escape sequences on Windows for progress bar support
 	enableWindowsANSI()
 
-	totalRowsFlag := flag.Int("rows", 65_000_000, "Total number of rows to process (e.g., 100000000 for 100M)")
+	totalRowsFlag := flag.Int("rows", 65_000_000, "Total number of tasks to process (e.g., 100000000 for 100M tasks)")
 	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect, max 8)")
-	chunkSizeFlag := flag.Int("chunk", 500, "Rows per task chunk (smaller = more tasks, default 500)")
+	chunkSizeFlag := flag.Int("chunk", 500, "Items per task chunk (smaller = more concurrent tasks, default 500)")
 	ciModeFlag := flag.Bool("ci", false, "CI mode: disable progress bar and animations")
 	plainModeFlag := flag.Bool("plain", false, "Plain mode: disable colors and emojis")
 	balancedFlag := flag.Bool("balanced", true, "Balanced mode: generate uniform-sized chunks to reduce workload imbalance")
-	isolatedFlag := flag.String("isolated", "", "Isolated mode: test only one strategy (e.g., 'Work-Stealing', 'MPMC Queue')")
+	strategyFlag := flag.String("strategy", "", "Run a specific scheduler strategy (e.g., 'Work-Stealing', 'MPMC Queue'). If empty, runs all strategies")
 	iterationsFlag := flag.Int("iterations", 1, "Number of iterations to run per strategy (for statistical analysis)")
 	warmupFlag := flag.Int("warmup", 0, "Number of warmup iterations before measurement")
+	priorityFlag := flag.Bool("priority", false, "Priority mode: reverse task order to test priority-based schedulers reordering tasks")
+	burstFlag := flag.Bool("burst", false, "Burst mode: submit tasks in waves to test backpressure handling (future use)")
 	flag.Parse()
 
 	ciMode := isCIMode(*ciModeFlag)
@@ -556,11 +567,17 @@ func main() {
 	}
 
 	var tasks []StationData
-	if *balancedFlag {
+	if *priorityFlag {
+		// Priority mode: reverse task order to test priority reordering
+		tasks = generatePriorityStationData(*totalRowsFlag, *chunkSizeFlag)
+	} else if *balancedFlag {
 		tasks = generateBalancedStationData(*totalRowsFlag, *chunkSizeFlag)
 	} else {
 		tasks = generateStationData(*totalRowsFlag, *chunkSizeFlag)
 	}
+
+	// Note: burstFlag is reserved for future burst submission logic
+	_ = *burstFlag
 
 	totalRows := 0
 	totalSizeMB := 0.0
@@ -571,7 +588,7 @@ func main() {
 
 	printConfiguration(numWorkers, totalRows, totalSizeMB, len(tasks), *chunkSizeFlag, *balancedFlag)
 
-	strategies := getStrategiesToRun(*isolatedFlag, *iterationsFlag, *warmupFlag)
+	strategies := getStrategiesToRun(*strategyFlag, *iterationsFlag, *warmupFlag)
 
 	results := make([]StrategyResult, 0, len(strategies))
 
@@ -634,7 +651,7 @@ func main() {
 		}
 
 		if ciMode {
-			fmt.Printf("✓ %s completed in %v (%.1f M rows/s)\n",
+			fmt.Printf("✓ %s completed in %v (%.1f M tasks/s)\n",
 				strategy,
 				finalResult.TotalTime.Round(time.Millisecond),
 				finalResult.ThroughputRowsPS/1_000_000)
