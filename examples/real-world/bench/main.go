@@ -33,11 +33,10 @@ var (
 // StationData represents a weather station's measurement batch (or chunk)
 type StationData struct {
 	StationName string
-	ChunkID     int     // Chunk number for this station
-	NumReadings int     // Number of readings in this chunk
-	SizeMB      float64 // Size in MB for this chunk
-	Complexity  string  // Tier: Huge, Large, Medium, Small, Tiny
-	StartIndex  int     // Starting index for seed offset
+	ChunkID     int    // Chunk number for this station
+	NumReadings int    // Number of readings in this chunk
+	Complexity  string // Tier: Huge, Large, Medium, Small, Tiny
+	StartIndex  int    // Starting index for seed offset
 }
 
 // StationStats represents aggregated statistics for a station
@@ -163,7 +162,6 @@ func generateBalancedStationData(totalRows int, chunkSize int) []StationData {
 			StationName: stationName,
 			ChunkID:     chunkID,
 			NumReadings: chunkRows,
-			SizeMB:      float64(chunkRows) * 0.000026, // ~26 bytes per row
 			Complexity:  "Uniform",
 			StartIndex:  startIdx,
 		})
@@ -186,53 +184,51 @@ func generateStationData(totalRows int, chunkSize int) []StationData {
 	stationDistribution := []struct {
 		name    string
 		percent float64
-		sizeMB  float64
 		tier    string
 	}{
 		// HUGE stations - 68% total
-		{"Beijing", 22.77, 600, "Huge"},
-		{"Tokyo", 18.22, 480, "Huge"},
-		{"Delhi", 27.32, 720, "Huge"},
+		{"Beijing", 22.77, "Huge"},
+		{"Tokyo", 18.22, "Huge"},
+		{"Delhi", 27.32, "Huge"},
 
 		// Large stations - 27% total
-		{"Shanghai", 7.59, 200, "Large"},
-		{"Mumbai", 6.83, 180, "Large"},
-		{"Cairo", 5.77, 152, "Large"},
-		{"Moscow", 6.38, 168, "Large"},
+		{"Shanghai", 7.59, "Large"},
+		{"Mumbai", 6.83, "Large"},
+		{"Cairo", 5.77, "Large"},
+		{"Moscow", 6.38, "Large"},
 
 		// Medium stations - 4% total
-		{"London", 0.68, 18, "Medium"},
-		{"Paris", 0.58, 15, "Medium"},
-		{"Berlin", 0.64, 17, "Medium"},
-		{"Rome", 0.53, 14, "Medium"},
-		{"Madrid", 0.59, 16, "Medium"},
-		{"Amsterdam", 0.43, 11, "Medium"},
-		{"Brussels", 0.47, 12, "Medium"},
-		{"Vienna", 0.52, 14, "Medium"},
+		{"London", 0.68, "Medium"},
+		{"Paris", 0.58, "Medium"},
+		{"Berlin", 0.64, "Medium"},
+		{"Rome", 0.53, "Medium"},
+		{"Madrid", 0.59, "Medium"},
+		{"Amsterdam", 0.43, "Medium"},
+		{"Brussels", 0.47, "Medium"},
+		{"Vienna", 0.52, "Medium"},
 
 		// Small/Tiny stations - 1% total
-		{"Oslo", 0.068, 1.8, "Small"},
-		{"Helsinki", 0.058, 1.5, "Small"},
-		{"Stockholm", 0.064, 1.7, "Small"},
-		{"Copenhagen", 0.062, 1.6, "Small"},
-		{"Dublin", 0.053, 1.4, "Small"},
-		{"Lisbon", 0.059, 1.6, "Small"},
-		{"Athens", 0.067, 1.8, "Small"},
-		{"Warsaw", 0.061, 1.6, "Small"},
-		{"Prague", 0.056, 1.5, "Small"},
-		{"Budapest", 0.055, 1.4, "Small"},
-		{"Reykjavik", 0.018, 0.5, "Tiny"},
-		{"Luxembourg", 0.023, 0.6, "Tiny"},
-		{"Monaco", 0.012, 0.3, "Tiny"},
-		{"Vaduz", 0.014, 0.4, "Tiny"},
-		{"Andorra", 0.017, 0.4, "Tiny"},
+		{"Oslo", 0.068, "Small"},
+		{"Helsinki", 0.058, "Small"},
+		{"Stockholm", 0.064, "Small"},
+		{"Copenhagen", 0.062, "Small"},
+		{"Dublin", 0.053, "Small"},
+		{"Lisbon", 0.059, "Small"},
+		{"Athens", 0.067, "Small"},
+		{"Warsaw", 0.061, "Small"},
+		{"Prague", 0.056, "Small"},
+		{"Budapest", 0.055, "Small"},
+		{"Reykjavik", 0.018, "Tiny"},
+		{"Luxembourg", 0.023, "Tiny"},
+		{"Monaco", 0.012, "Tiny"},
+		{"Vaduz", 0.014, "Tiny"},
+		{"Andorra", 0.017, "Tiny"},
 	}
 
 	tasks := make([]StationData, 0)
 
 	for _, dist := range stationDistribution {
 		stationRows := int(float64(totalRows) * dist.percent / 100.0)
-		stationSizeMB := dist.sizeMB * (float64(stationRows) / (float64(totalRows) * dist.percent / 100.0))
 
 		numChunks := (stationRows + chunkSize - 1) / chunkSize //
 		if numChunks == 0 {
@@ -252,7 +248,6 @@ func generateStationData(totalRows int, chunkSize int) []StationData {
 				StationName: dist.name,
 				ChunkID:     chunkID,
 				NumReadings: chunkRows,
-				SizeMB:      stationSizeMB * (float64(chunkRows) / float64(stationRows)),
 				Complexity:  dist.tier,
 				StartIndex:  startIdx,
 			})
@@ -281,22 +276,6 @@ func formatNumber(n int) string {
 		result += string(c)
 	}
 	return result
-}
-
-// isCIMode detects if running in CI environment
-func isCIMode(ciFlag bool) bool {
-	if ciFlag {
-		return true
-	}
-
-	ciEnvVars := []string{"CI", "GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI", "JENKINS_HOME"}
-	for _, env := range ciEnvVars {
-		value := os.Getenv(env)
-		if value == "true" || value == "1" {
-			return true
-		}
-	}
-	return false
 }
 
 type Runner struct {
@@ -333,19 +312,16 @@ func (r *Runner) Run(bar *progressbar.ProgressBar) StrategyResult {
 	}
 
 	totalRows := 0
-	totalSizeMB := 0.0
 	for _, s := range r.stations {
 		totalRows += s.NumReadings
-		totalSizeMB += s.SizeMB
 	}
 
 	throughputRows := float64(totalRows) / elapsed.Seconds()
-	throughputMB := totalSizeMB / elapsed.Seconds()
 
 	return StrategyResult{
 		Name:             r.strategy,
 		TotalTime:        elapsed,
-		ThroughputMBps:   throughputMB,
+		ThroughputMBps:   0,
 		ThroughputRowsPS: throughputRows,
 	}
 }
@@ -507,7 +483,7 @@ func printComparisonTable(results []StrategyResult) {
 	_ = table.Render()
 }
 
-func printConfiguration(numWorkers int, totalRows int, totalSizeMB float64, numTasks int, chunkSize int, balanced bool) {
+func printConfiguration(numWorkers int, totalRows int, numTasks int, chunkSize int, balanced bool) {
 	_, _ = bold.Println("⚙️  Configuration:")
 	fmt.Printf("  Workers:          %d (using %d CPU cores)\n", numWorkers, runtime.NumCPU())
 	fmt.Printf("  Strategies:       7 different scheduling algorithms\n")
@@ -523,7 +499,6 @@ func printConfiguration(numWorkers int, totalRows int, totalSizeMB float64, numT
 	_, _ = bold.Println("📊 Workload Details:")
 	fmt.Printf("  • %s concurrent tasks submitted to scheduler\n", formatNumber(numTasks))
 	fmt.Printf("  • %s total items to process\n", formatNumber(totalRows))
-	fmt.Printf("  • %.1f GB simulated data size\n", totalSizeMB/1024)
 	if !balanced {
 		fmt.Printf("  • 3 HUGE tasks (68%% of workload) → %s tasks\n", formatNumber(numTasks*68/100))
 		fmt.Printf("  • 27 smaller tasks (32%% of workload) → %s tasks\n", formatNumber(numTasks*32/100))
@@ -578,22 +553,15 @@ func main() {
 	totalRowsFlag := flag.Int("rows", 65_000_000, "Total number of tasks to process (e.g., 100000000 for 100M tasks)")
 	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect, max 8)")
 	chunkSizeFlag := flag.Int("chunk", 500, "Items per task chunk (smaller = more concurrent tasks, default 500)")
-	ciModeFlag := flag.Bool("ci", false, "CI mode: disable progress bar and animations")
-	plainModeFlag := flag.Bool("plain", false, "Plain mode: disable colors and emojis")
 	balancedFlag := flag.Bool("balanced", true, "Balanced mode: generate uniform-sized chunks to reduce workload imbalance")
 	strategyFlag := flag.String("strategy", "", "Run a specific scheduler strategy (e.g., 'Work-Stealing', 'MPMC Queue'). If empty, runs all strategies")
 	iterationsFlag := flag.Int("iterations", 1, "Number of iterations to run per strategy (for statistical analysis)")
 	warmupFlag := flag.Int("warmup", 0, "Number of warmup iterations before measurement")
 	priorityFlag := flag.Bool("priority", false, "Priority mode: reverse task order to test priority-based schedulers reordering tasks")
-	burstFlag := flag.Bool("burst", false, "Burst mode: submit tasks in waves to test backpressure handling (future use)")
 	cpuProfileFlag := flag.String("cpuprofile", "", "Write CPU profile to file")
 	memProfileFlag := flag.String("memprofile", "", "Write memory profile to file")
 	flag.Parse()
 
-	ciMode := isCIMode(*ciModeFlag)
-	_ = *plainModeFlag
-
-	// Setup CPU profiling if requested
 	if *cpuProfileFlag != "" {
 		f, err := os.Create(*cpuProfileFlag)
 		if err != nil {
@@ -635,14 +603,9 @@ func main() {
 		fmt.Printf("Memory profiling enabled, writing to: %s\n", *memProfileFlag)
 	}
 
-	numWorkers := *workersFlag
-	if numWorkers == 0 {
-		numWorkers = min(runtime.NumCPU(), 8)
-	}
-
+	numWorkers := min(runtime.NumCPU(), *workersFlag)
 	var tasks []StationData
 	if *priorityFlag {
-		// Priority mode: reverse task order to test priority reordering
 		tasks = generatePriorityStationData(*totalRowsFlag, *chunkSizeFlag)
 	} else if *balancedFlag {
 		tasks = generateBalancedStationData(*totalRowsFlag, *chunkSizeFlag)
@@ -650,17 +613,12 @@ func main() {
 		tasks = generateStationData(*totalRowsFlag, *chunkSizeFlag)
 	}
 
-	// Note: burstFlag is reserved for future burst submission logic
-	_ = *burstFlag
-
 	totalRows := 0
-	totalSizeMB := 0.0
 	for _, task := range tasks {
 		totalRows += task.NumReadings
-		totalSizeMB += task.SizeMB
 	}
 
-	printConfiguration(numWorkers, totalRows, totalSizeMB, len(tasks), *chunkSizeFlag, *balancedFlag)
+	printConfiguration(numWorkers, totalRows, len(tasks), *chunkSizeFlag, *balancedFlag)
 
 	strategies := getStrategiesToRun(*strategyFlag, *iterationsFlag, *warmupFlag)
 
@@ -669,21 +627,11 @@ func main() {
 	_, _ = bold.Println("Running Benchmarks...")
 	fmt.Println()
 
-	var bar *progressbar.ProgressBar
-	if !ciMode {
-		bar = makeProgressBar(strategies)
-	}
+	bar := makeProgressBar(strategies)
 
-	for i, strategy := range strategies {
-		if ciMode {
-			fmt.Printf("[%d/%d] Testing strategy: %s\n", i+1, len(strategies), strategy)
-		}
-
+	for _, strategy := range strategies {
 		if *warmupFlag > 0 {
 			for w := 0; w < *warmupFlag; w++ {
-				if ciMode {
-					fmt.Printf("  Warmup %d/%d...\n", w+1, *warmupFlag)
-				}
 				r := newRunner(strategy, tasks, numWorkers)
 				_ = r.Run(nil)
 				runtime.GC() // Force GC between warmup runs
@@ -693,12 +641,7 @@ func main() {
 
 		iterationResults := make([]StrategyResult, 0, *iterationsFlag)
 		for iter := 0; iter < *iterationsFlag; iter++ {
-			if ciMode && *iterationsFlag > 1 {
-				fmt.Printf("  Iteration %d/%d...\n", iter+1, *iterationsFlag)
-			}
-			if bar != nil {
-				bar.Describe(fmt.Sprintf("Testing: %s", strategy))
-			}
+			bar.Describe(fmt.Sprintf("Testing: %s", strategy))
 
 			r := newRunner(strategy, tasks, numWorkers)
 			iterationResults = append(iterationResults, r.Run(bar))
@@ -714,23 +657,11 @@ func main() {
 			finalResult = iterationResults[0]
 		} else {
 			finalResult = calculateStats(strategy, iterationResults)
-			if ciMode {
-				printIterationStats(iterationResults)
-			}
+			printIterationStats(iterationResults)
 		}
 
 		results = append(results, finalResult)
-
-		if !ciMode {
-			time.Sleep(time.Millisecond * 300)
-		}
-
-		if ciMode {
-			fmt.Printf("✓ %s completed in %v (%.1f M tasks/s)\n",
-				strategy,
-				finalResult.TotalTime.Round(time.Millisecond),
-				finalResult.ThroughputRowsPS/1_000_000)
-		}
+		time.Sleep(time.Millisecond * 300)
 	}
 
 	fmt.Println()
