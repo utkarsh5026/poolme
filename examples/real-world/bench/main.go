@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"math"
-	"math/rand"
 	"os"
 	"runtime"
 	"runtime/pprof"
@@ -65,19 +64,36 @@ var (
 	red  = color.New(color.FgRed)
 )
 
-func processStation(ctx context.Context, station StationData) (StationStats, error) {
+func processStation(_ context.Context, station StationData) (StationStats, error) {
 	start := time.Now()
 
 	minTemp := 100.0
 	maxTemp := -100.0
 	sumTemp := 0.0
 
-	seed := int64(hashString(station.StationName)) + int64(station.StartIndex)
-	rng := rand.New(rand.NewSource(seed))
+	state := uint64(hashString(station.StationName)) + uint64(station.StartIndex)
+	if state == 0 {
+		state = 1 // Xorshift must not be zero
+	}
 
 	for i := 0; i < station.NumReadings; i++ {
-		temp := rng.Float64()*60 - 20
-		temp = math.Round(temp*10) / 10
+		// 2. Inline Xorshift Algorithm (High performance randomness)
+		x := state
+		x ^= x << 13
+		x ^= x >> 17
+		x ^= x << 5
+		state = x
+
+		// 3. Convert uint64 to float range [-20, 40]
+		// This effectively replaces rng.Float64()*60 - 20
+		// We use the remainder to get a range [0, 600) then divide by 10 for decimal
+		// This avoids float multiplication overhead
+
+		// Optimize: (x % 600) gives 0-599. Subtract 200 gives -200 to 399. Divide by 10 gives -20.0 to 39.9
+		rawTemp := int(x % 600)             // 0 to 599
+		temp := float64(rawTemp-200) / 10.0 // -20.0 to 39.9
+
+		// (No math.Round needed because we constructed it from integers!)
 
 		if temp < minTemp {
 			minTemp = temp
@@ -87,6 +103,7 @@ func processStation(ctx context.Context, station StationData) (StationStats, err
 		}
 		sumTemp += temp
 
+		// Simulated heavy load (Keep this if you need to simulate CPU work)
 		if i%1000 == 0 {
 			_ = math.Sin(float64(i)) * math.Cos(temp)
 		}
@@ -97,9 +114,9 @@ func processStation(ctx context.Context, station StationData) (StationStats, err
 	return StationStats{
 		StationName: station.StationName,
 		NumReadings: station.NumReadings,
-		MinTemp:     math.Round(minTemp*10) / 10,
-		MaxTemp:     math.Round(maxTemp*10) / 10,
-		AvgTemp:     math.Round(avgTemp*10) / 10,
+		MinTemp:     minTemp,
+		MaxTemp:     maxTemp,
+		AvgTemp:     math.Round(avgTemp*10) / 10, // Round only once at the end
 		ProcessTime: time.Since(start),
 	}, nil
 }
@@ -282,73 +299,42 @@ func isCIMode(ciFlag bool) bool {
 	return false
 }
 
-func runStrategy(strategyName string, stations []StationData, numWorkers int, bar *progressbar.ProgressBar) StrategyResult {
-	ctx := context.Background()
+type Runner struct {
+	strategy   string
+	numWorkers int
+	stations   []StationData
+}
 
-	var workerPool *pool.WorkerPool[StationData, StationStats]
-
-	switch strategyName {
-	case "Work-Stealing":
-		workerPool = pool.NewWorkerPool[StationData, StationStats](
-			pool.WithWorkerCount(numWorkers),
-			pool.WithWorkStealing(),
-		)
-	case "MPMC Queue":
-		workerPool = pool.NewWorkerPool[StationData, StationStats](
-			pool.WithWorkerCount(numWorkers),
-			pool.WithMPMCQueue(),
-		)
-	case "Priority Queue":
-		workerPool = pool.NewWorkerPool[StationData, StationStats](
-			pool.WithWorkerCount(numWorkers),
-			pool.WithPriorityQueue(func(a, b StationData) bool {
-				return a.NumReadings > b.NumReadings
-			}),
-		)
-	case "Skip List":
-		workerPool = pool.NewWorkerPool[StationData, StationStats](
-			pool.WithWorkerCount(numWorkers),
-			pool.WithSkipList(func(a, b StationData) bool {
-				return a.NumReadings > b.NumReadings
-			}),
-		)
-	case "Bitmask":
-		workerPool = pool.NewWorkerPool[StationData, StationStats](
-			pool.WithWorkerCount(numWorkers),
-			pool.WithBitmask(),
-		)
-	case "LMAX Disruptor":
-		workerPool = pool.NewWorkerPool[StationData, StationStats](
-			pool.WithWorkerCount(numWorkers),
-			pool.WithLmax(),
-		)
-	default:
-		workerPool = pool.NewWorkerPool[StationData, StationStats](
-			pool.WithWorkerCount(numWorkers),
-		)
+func newRunner(strategyName string, stations []StationData, numWorkers int) *Runner {
+	return &Runner{
+		strategy:   strategyName,
+		numWorkers: numWorkers,
+		stations:   stations,
 	}
+}
 
+func (r *Runner) Run(bar *progressbar.ProgressBar) StrategyResult {
+	ctx := context.Background()
+	wPool := r.selectStrategy()
 	start := time.Now()
 
 	// Process all tasks using the batch Process method
 	// This handles submission and result collection internally, avoiding deadlocks
-	_, err := workerPool.Process(ctx, stations, processStation)
+	_, err := wPool.Process(ctx, r.stations, processStation)
 	if err != nil {
-		red.Printf("Error processing %s: %v\n", strategyName, err)
-		return StrategyResult{Name: strategyName}
+		_, _ = red.Printf("Error processing %s: %v\n", r.strategy, err)
+		return StrategyResult{Name: r.strategy}
 	}
 
 	elapsed := time.Since(start)
 
-	// Update progress bar
 	if bar != nil {
-		bar.Add(1)
+		_ = bar.Add(1)
 	}
 
-	// Calculate metrics
 	totalRows := 0
 	totalSizeMB := 0.0
-	for _, s := range stations {
+	for _, s := range r.stations {
 		totalRows += s.NumReadings
 		totalSizeMB += s.SizeMB
 	}
@@ -357,10 +343,53 @@ func runStrategy(strategyName string, stations []StationData, numWorkers int, ba
 	throughputMB := totalSizeMB / elapsed.Seconds()
 
 	return StrategyResult{
-		Name:             strategyName,
+		Name:             r.strategy,
 		TotalTime:        elapsed,
 		ThroughputMBps:   throughputMB,
 		ThroughputRowsPS: throughputRows,
+	}
+}
+
+func (r *Runner) selectStrategy() *pool.WorkerPool[StationData, StationStats] {
+	switch r.strategy {
+	case "Work-Stealing":
+		return pool.NewWorkerPool[StationData, StationStats](
+			pool.WithWorkerCount(r.numWorkers),
+			pool.WithWorkStealing(),
+		)
+	case "MPMC Queue":
+		return pool.NewWorkerPool[StationData, StationStats](
+			pool.WithWorkerCount(r.numWorkers),
+			pool.WithMPMCQueue(),
+		)
+	case "Priority Queue":
+		return pool.NewWorkerPool[StationData, StationStats](
+			pool.WithWorkerCount(r.numWorkers),
+			pool.WithPriorityQueue(func(a, b StationData) bool {
+				return a.NumReadings > b.NumReadings
+			}),
+		)
+	case "Skip List":
+		return pool.NewWorkerPool[StationData, StationStats](
+			pool.WithWorkerCount(r.numWorkers),
+			pool.WithSkipList(func(a, b StationData) bool {
+				return a.NumReadings > b.NumReadings
+			}),
+		)
+	case "Bitmask":
+		return pool.NewWorkerPool[StationData, StationStats](
+			pool.WithWorkerCount(r.numWorkers),
+			pool.WithBitmask(),
+		)
+	case "LMAX Disruptor":
+		return pool.NewWorkerPool[StationData, StationStats](
+			pool.WithWorkerCount(r.numWorkers),
+			pool.WithLmax(),
+		)
+	default:
+		return pool.NewWorkerPool[StationData, StationStats](
+			pool.WithWorkerCount(r.numWorkers),
+		)
 	}
 }
 
@@ -399,8 +428,8 @@ func printIterationStats(results []StrategyResult) {
 	// Sort for percentile calculations
 	slices.Sort(times)
 
-	min := times[0]
-	max := times[len(times)-1]
+	mini := times[0]
+	maxi := times[len(times)-1]
 	median := times[len(times)/2]
 
 	// Calculate mean
@@ -419,10 +448,10 @@ func printIterationStats(results []StrategyResult) {
 	stddev := time.Duration(math.Sqrt(variance / float64(len(times))))
 
 	fmt.Printf("    Min: %v | Median: %v | Mean: %v | Max: %v | StdDev: %v\n",
-		min.Round(time.Millisecond),
+		mini.Round(time.Millisecond),
 		median.Round(time.Millisecond),
 		mean.Round(time.Millisecond),
-		max.Round(time.Millisecond),
+		maxi.Round(time.Millisecond),
 		stddev.Round(time.Millisecond))
 }
 
@@ -465,7 +494,7 @@ func printComparisonTable(results []StrategyResult) {
 			vsFastestStr = "baseline"
 		}
 
-		table.Append(
+		_ = table.Append(
 			rankIcon,
 			r.Name,
 			r.TotalTime.Round(time.Millisecond).String(),
@@ -475,11 +504,11 @@ func printComparisonTable(results []StrategyResult) {
 		)
 	}
 
-	table.Render()
+	_ = table.Render()
 }
 
 func printConfiguration(numWorkers int, totalRows int, totalSizeMB float64, numTasks int, chunkSize int, balanced bool) {
-	bold.Println("⚙️  Configuration:")
+	_, _ = bold.Println("⚙️  Configuration:")
 	fmt.Printf("  Workers:          %d (using %d CPU cores)\n", numWorkers, runtime.NumCPU())
 	fmt.Printf("  Strategies:       7 different scheduling algorithms\n")
 	fmt.Printf("  Total Items:      %s items to process\n", formatNumber(totalRows))
@@ -491,7 +520,7 @@ func printConfiguration(numWorkers int, totalRows int, totalSizeMB float64, numT
 	}
 	fmt.Println()
 
-	bold.Println("📊 Workload Details:")
+	_, _ = bold.Println("📊 Workload Details:")
 	fmt.Printf("  • %s concurrent tasks submitted to scheduler\n", formatNumber(numTasks))
 	fmt.Printf("  • %s total items to process\n", formatNumber(totalRows))
 	fmt.Printf("  • %.1f GB simulated data size\n", totalSizeMB/1024)
@@ -508,7 +537,7 @@ func getStrategiesToRun(isolated string, iterations int, warmup int) []string {
 	if isolated != "" {
 		found := slices.Contains(allStrategies, isolated)
 		if !found {
-			red.Printf("Error: Unknown strategy '%s'\n", isolated)
+			_, _ = red.Printf("Error: Unknown strategy '%s'\n", isolated)
 			fmt.Println("Available strategies:", allStrategies)
 			os.Exit(1)
 		}
@@ -568,12 +597,18 @@ func main() {
 	if *cpuProfileFlag != "" {
 		f, err := os.Create(*cpuProfileFlag)
 		if err != nil {
-			red.Printf("Error creating CPU profile: %v\n", err)
+			_, _ = red.Printf("Error creating CPU profile: %v\n", err)
 			os.Exit(1)
 		}
-		defer f.Close()
+		defer func(f *os.File) {
+			err := f.Close()
+			if err != nil {
+				_, _ = red.Printf("Error closing memory file: %v\n", err)
+			}
+		}(f)
+
 		if err := pprof.StartCPUProfile(f); err != nil {
-			red.Printf("Error starting CPU profile: %v\n", err)
+			_, _ = red.Printf("Error starting CPU profile: %v\n", err)
 			os.Exit(1)
 		}
 		defer pprof.StopCPUProfile()
@@ -585,15 +620,17 @@ func main() {
 		var err error
 		memProfileFile, err = os.Create(*memProfileFlag)
 		if err != nil {
-			red.Printf("Error creating memory profile: %v\n", err)
+			_, _ = red.Printf("Error creating memory profile: %v\n", err)
 			os.Exit(1)
 		}
 		defer func() {
 			runtime.GC()
 			if err := pprof.WriteHeapProfile(memProfileFile); err != nil {
-				red.Printf("Error writing memory profile: %v\n", err)
+				_, _ = red.Printf("Error writing memory profile: %v\n", err)
 			}
-			memProfileFile.Close()
+			if err := memProfileFile.Close(); err != nil {
+				_, _ = red.Printf("Error closing memory file: %v\n", err)
+			}
 		}()
 		fmt.Printf("Memory profiling enabled, writing to: %s\n", *memProfileFlag)
 	}
@@ -629,7 +666,7 @@ func main() {
 
 	results := make([]StrategyResult, 0, len(strategies))
 
-	bold.Println("Running Benchmarks...")
+	_, _ = bold.Println("Running Benchmarks...")
 	fmt.Println()
 
 	var bar *progressbar.ProgressBar
@@ -647,7 +684,8 @@ func main() {
 				if ciMode {
 					fmt.Printf("  Warmup %d/%d...\n", w+1, *warmupFlag)
 				}
-				_ = runStrategy(strategy, tasks, numWorkers, nil)
+				r := newRunner(strategy, tasks, numWorkers)
+				_ = r.Run(nil)
 				runtime.GC() // Force GC between warmup runs
 				time.Sleep(100 * time.Millisecond)
 			}
@@ -662,8 +700,8 @@ func main() {
 				bar.Describe(fmt.Sprintf("Testing: %s", strategy))
 			}
 
-			result := runStrategy(strategy, tasks, numWorkers, bar)
-			iterationResults = append(iterationResults, result)
+			r := newRunner(strategy, tasks, numWorkers)
+			iterationResults = append(iterationResults, r.Run(bar))
 
 			if iter < *iterationsFlag-1 {
 				runtime.GC()
