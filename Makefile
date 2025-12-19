@@ -52,11 +52,11 @@ help:
 	@echo "  make check             - Run fmt, vet, lint, and gosec"
 	@echo ""
 	@echo "$(GREEN)Benchmark Scenarios (Workload Comparisons):$(NC)"
-	@echo "  make bench-uniform      - Scenario 1: Uniform throughput (1B tasks)"
-	@echo "  make bench-skewed       - Scenario 2: Skewed workload (Work-Stealing test)"
-	@echo "  make bench-priority     - Scenario 3: Priority ordering (100M tasks)"
-	@echo "  make bench-burst        - Scenario 4: Burst traffic backpressure"
-	@echo "  make bench-small-pool   - Scenario 5: Small worker pool (4 workers)"
+	@echo "  make bench-uniform      - Scenario 1: Uniform throughput (500K tasks)"
+	@echo "  make bench-skewed       - Scenario 2: Imbalanced workload (200K tasks)"
+	@echo "  make bench-priority     - Scenario 3: Priority ordering (100K tasks)"
+	@echo "  make bench-burst        - Scenario 4: High-concurrency stress (1M tasks)"
+	@echo "  make bench-small-pool   - Scenario 5: Small worker pool (500K tasks, 4 workers)"
 	@echo "  make bench-all          - Run all 5 benchmark scenarios"
 	@echo ""
 	@echo "$(GREEN)Utilities:$(NC)"
@@ -220,54 +220,54 @@ tidy:
 ## Benchmark Scenarios - Different workload patterns to show strategy strengths
 ## ═══════════════════════════════════════════════════════════
 
-## bench-uniform: Scenario 1 - Uniform high-throughput baseline (1B tasks)
+## bench-uniform: Scenario 1 - Uniform high-throughput baseline
 bench-uniform:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(BLUE)║  Scenario 1: Uniform High-Throughput Baseline             ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 1B tasks, all identical size (pure throughput)$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true
+	@echo "$(YELLOW)📊 Workload: 500K tasks, all identical complexity (pure throughput)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=500000 -complexity=50 -workload=balanced
 	@echo ""
 
-## bench-skewed: Scenario 2 - Highly skewed workload (1B tasks)
+## bench-skewed: Scenario 2 - Highly skewed workload (load balancing test)
 bench-skewed:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(BLUE)║  Scenario 2: Highly Skewed Workload (Load Balancing)      ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 68%% in 3 huge tasks, extreme load imbalance$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 1000000000 -chunk 5000 -balanced=false
+	@echo "$(YELLOW)📊 Workload: 200K tasks with 10%% heavy, 20%% medium, 70%% light (extreme imbalance)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=200000 -complexity=500 -workload=imbalanced
 	@echo ""
 
-## bench-priority: Scenario 3 - Priority-ordered processing (100M tasks)
+## bench-priority: Scenario 3 - Priority-ordered processing (reordering test)
 bench-priority:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(BLUE)║  Scenario 3: Priority-Ordered Processing                  ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 100M tasks, reverse order (test priority reordering)$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 100000000 -chunk 1000 -balanced=false -priority=true
+	@echo "$(YELLOW)📊 Workload: 100K tasks in reverse order (test priority scheduler reordering)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=100000 -complexity=5000 -workload=priority
 	@echo ""
 
-## bench-burst: Scenario 4 - Burst traffic with backpressure (500M tasks)
+## bench-burst: Scenario 4 - High-concurrency stress test
 bench-burst:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║  Scenario 4: Burst Traffic with Backpressure              ║$(NC)"
+	@echo "$(BLUE)║  Scenario 4: High-Concurrency Stress Test                 ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 500M tasks in waves (bursty traffic pattern)$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 500000000 -chunk 500 -balanced=true -burst=true
+	@echo "$(YELLOW)📊 Workload: 1M tasks with balanced complexity (stress test)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=1000000 -complexity=1000 -workload=balanced
 	@echo ""
 
-## bench-small-pool: Scenario 5 - Small worker pool (1B tasks, 4 workers)
+## bench-small-pool: Scenario 5 - Small worker pool (4 workers)
 bench-small-pool:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(BLUE)║  Scenario 5: Small Worker Pool Efficiency                 ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 1B tasks with only 4 workers (minimal overhead)$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true -workers=4
+	@echo "$(YELLOW)📊 Workload: 500K tasks with only 4 workers (low contention test)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=500000 -complexity=5000 -workload=balanced -workers=4
 	@echo ""
 
 ## bench-all: Run all 5 benchmark scenarios sequentially
