@@ -46,12 +46,7 @@ const (
 	// initialSequence represents the initial state of sequence counters.
 	// Using max uint64 (equivalent to -1 in two's complement) allows the first
 	// valid sequence to be 0 after incrementing.
-	initialSequence = ^uint64(0)
-
-	// maxConsumerWaitSpins defines the maximum number of spin iterations before
-	// yielding the processor. This balances CPU usage against latency - spinning
-	// is faster for short waits, but yielding is more efficient for longer waits.
-	maxConsumerWaitSpins = 100
+	notStarted = ^uint64(0)
 
 	// lmxConsumerBatchSize determines how many tasks a consumer attempts to claim
 	// and process in a single batch. Larger batches improve throughput by reducing
@@ -179,10 +174,9 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 		ring[i].sequence = uint64(i) - uint64(capacity)
 	}
 
-	// Create per-worker sequences (initialized to -1 means no slots claimed yet)
 	workerSeqs := make([]lmaxSeq, conf.WorkerCount)
 	for i := range workerSeqs {
-		workerSeqs[i].set(initialSequence) // Set to max uint64 (equivalent to -1)
+		workerSeqs[i].set(notStarted) // Set to max uint64 (equivalent to -1)
 	}
 
 	l := &lmaxStrategy[T, R]{
@@ -194,10 +188,9 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 		quit:       newWorkerSignal(),
 	}
 
-	// Set to max uint64 (equivalent to -1)
-	l.tail.set(initialSequence)
-	l.consumerSeq.set(initialSequence)
-	l.gatingSeq.set(initialSequence)
+	l.tail.set(notStarted)
+	l.consumerSeq.set(notStarted)
+	l.gatingSeq.set(notStarted)
 	l.runner = newWorkerRunner(conf, l)
 
 	return l
@@ -240,33 +233,33 @@ func (l *lmaxStrategy[T, R]) Submit(t *types.SubmittedTask[T, R]) error {
 // data. This function prevents that by blocking until consumers have advanced.
 func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
 	wrapSlot := nextSeq - uint64(l.capacity)
+	spinCount := 0
 	for {
 		if l.quit.IsClosed() {
 			return context.Canceled
 		}
 
 		gating := l.gatingSeq.get()
-		// Special case for initial state: if no consumer has started (gatingSeq == initialSequence),
+
+		// Special case for initial state: if no consumer has started (gatingSeq == notStarted),
 		// only allow submitting the first `capacity` tasks to prevent wrapping before consumers start
-		if gating == initialSequence {
+		if gating == notStarted {
 			if nextSeq < uint64(l.capacity) {
 				return nil
 			}
 			// Block spinning until consumers start and update gating
 			// With periodic gating updates in consume(), this will unblock quickly
+			spinCount++
 			runtime.Gosched()
 			continue
 		}
 
 		// If we're still in the first lap (nextSeq < capacity), always allow
 		// since wrapSlot would wrap to a huge number in unsigned arithmetic
-		if nextSeq < uint64(l.capacity) {
+		if nextSeq < uint64(l.capacity) || wrapSlot <= gating {
 			return nil
 		}
-
-		if wrapSlot <= gating {
-			return nil
-		}
+		spinCount++
 		runtime.Gosched()
 	}
 }
@@ -302,7 +295,7 @@ func (l *lmaxStrategy[T, R]) Shutdown() {
 
 // Worker runs the consumer loop for a single worker goroutine.
 func (l *lmaxStrategy[T, R]) Worker(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
-	l.workerSeqs[workerID].set(initialSequence)
+	l.workerSeqs[workerID].set(notStarted)
 	drainFunc := func(all bool) {
 		l.drain(ctx, workerID, executor, h, all)
 	}
@@ -336,7 +329,7 @@ func (l *lmaxStrategy[T, R]) drain(ctx context.Context, workerID int64, executor
 	for {
 		nextSeq, end, ok := l.resolveSeq()
 		if !ok {
-			if nextSeq == initialSequence {
+			if nextSeq == notStarted {
 				return
 			}
 			continue
@@ -371,18 +364,17 @@ func (l *lmaxStrategy[T, R]) drain(ctx context.Context, workerID int64, executor
 
 func (l *lmaxStrategy[T, R]) resolveSeq() (start, end uint64, correct bool) {
 	producer := l.tail.get()
-	consmer := l.consumerSeq.get()
+	consumer := l.consumerSeq.get()
 
-	if (consmer == initialSequence && producer == initialSequence) ||
-		(consmer != initialSequence && consmer >= producer) {
-		return initialSequence, 0, false
+	if (consumer == notStarted && producer == notStarted) ||
+		(consumer != notStarted && consumer >= producer) {
+		return notStarted, 0, false
 	}
 
-	start = consmer + 1
+	start = consumer + 1
 	end = min(start+uint64(lmxConsumerBatchSize)-1, producer)
 
-	if !l.consumerSeq.cas(consmer, end) {
-		runtime.Gosched()
+	if !l.consumerSeq.cas(consumer, end) {
 		return start, end, false
 	}
 
@@ -394,6 +386,9 @@ func (l *lmaxStrategy[T, R]) resolveSeq() (start, end uint64, correct bool) {
 func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
 	start, end, ok := l.resolveSeq()
 	if !ok {
+		// No work available - just yield and let other workers proceed
+		// Do NOT update workerSeq here - that would skip unprocessed tasks
+		runtime.Gosched()
 		return nil
 	}
 
@@ -408,11 +403,7 @@ func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, execut
 		}
 
 		l.workerSeqs[workerID].set(i)
-		if i == start || (i-start+1)%4 == 0 {
-			l.updateGatingSequence()
-		}
 	}
-
 	l.updateGatingSequence()
 	return nil
 }
@@ -424,7 +415,6 @@ func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, execut
 // producer to signal completion via the slot's sequence number.
 func (l *lmaxStrategy[T, R]) waitForProducer(ctx context.Context, seq uint64) error {
 	slot := &l.ring[seq&l.mask]
-	spins := 0
 
 	for {
 		if atomic.LoadUint64(&slot.sequence) == seq {
@@ -441,11 +431,7 @@ func (l *lmaxStrategy[T, R]) waitForProducer(ctx context.Context, seq uint64) er
 		default:
 		}
 
-		spins++
-		if spins > maxConsumerWaitSpins {
-			spins = 0
-			runtime.Gosched()
-		}
+		runtime.Gosched()
 	}
 }
 
@@ -454,41 +440,49 @@ func (l *lmaxStrategy[T, R]) waitForProducer(ctx context.Context, seq uint64) er
 // The gating sequence is the minimum progress across all workers. It serves
 // as the back-pressure mechanism: producers cannot write to slots where
 // sequence > gatingSeq + capacity (would overwrite unconsumed data).
+//
+// Workers at notStarted are treated as being at the consumer cursor to prevent
+// blocking the producer before they start consuming.
 func (l *lmaxStrategy[T, R]) updateGatingSequence() {
 	if len(l.workerSeqs) == 0 {
 		return
 	}
 
-	minSeq := uint64(0)
+	minSeq := uint64(notStarted) // Start with max uint64
 	initialized := false
 
 	for i := 0; i < len(l.workerSeqs); i++ {
 		seq := l.workerSeqs[i].get()
-		if seq == initialSequence {
-			continue
+
+		if seq == notStarted {
+			minSeq = notStarted
+			initialized = true
+			break
 		}
+
 		if !initialized {
 			minSeq = seq
 			initialized = true
 		} else {
-			minSeq = min(minSeq, seq)
+			if seq < minSeq { // Standard min finding
+				minSeq = seq
+			}
 		}
 	}
 
-	// If no worker has claimed anything yet, keep gating at initialSequence
-	// This prevents premature updates before workers actually start consuming
 	if !initialized {
 		return
 	}
 
+	// CAS loop to update gating sequence
 	for {
 		old := l.gatingSeq.get()
-		if old == initialSequence || minSeq > old {
+		// Only update if we are advancing OR if we are initializing from notStarted
+		if old == notStarted || (minSeq != notStarted && minSeq > old) {
 			if l.gatingSeq.cas(old, minSeq) {
 				return
 			}
 		} else {
-			// minSeq <= old and old != initialSequence, gating is already ahead
 			return
 		}
 	}
