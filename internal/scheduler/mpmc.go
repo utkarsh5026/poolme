@@ -251,9 +251,18 @@ func (q *mpmcQueue[T]) EnqueueBatch(tasks []T) (int, error) {
 				atomic.StoreUint64(&slot.sequence, currentSeq+1)
 			}
 
-			select {
-			case q.notifyC <- signal{}:
-			default:
+			// Send multiple notifications to wake up waiting workers.
+			// We send notifications equal to the number of tasks (up to a reasonable limit)
+			// to ensure multiple workers can wake up and process tasks concurrently.
+			notifyCount := min(int(count), 10)
+		loop:
+			for range notifyCount {
+				select {
+				case q.notifyC <- signal{}:
+				default:
+					// Channel full, at least one worker will wake up
+					break loop
+				}
 			}
 
 			return int(count), nil
