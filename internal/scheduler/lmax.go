@@ -38,6 +38,7 @@ import (
 	"context"
 	"runtime"
 	"sync/atomic"
+	"time"
 
 	"github.com/utkarsh5026/poolme/internal/types"
 )
@@ -232,8 +233,14 @@ func (l *lmaxStrategy[T, R]) Submit(t *types.SubmittedTask[T, R]) error {
 // eventually a producer would need to write to a slot that still contains unconsumed
 // data. This function prevents that by blocking until consumers have advanced.
 func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
+	if nextSeq < uint64(l.capacity) {
+		return nil
+	}
+
 	wrapSlot := nextSeq - uint64(l.capacity)
 	spinCount := 0
+	const maxSpinBeforeSleep = 1000
+
 	for {
 		if l.quit.IsClosed() {
 			return context.Canceled
@@ -241,26 +248,19 @@ func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
 
 		gating := l.gatingSeq.get()
 
-		// Special case for initial state: if no consumer has started (gatingSeq == notStarted),
-		// only allow submitting the first `capacity` tasks to prevent wrapping before consumers start
-		if gating == notStarted {
-			if nextSeq < uint64(l.capacity) {
-				return nil
-			}
-			// Block spinning until consumers start and update gating
-			// With periodic gating updates in consume(), this will unblock quickly
-			spinCount++
-			runtime.Gosched()
-			continue
-		}
-
-		// If we're still in the first lap (nextSeq < capacity), always allow
-		// since wrapSlot would wrap to a huge number in unsigned arithmetic
-		if nextSeq < uint64(l.capacity) || wrapSlot <= gating {
+		// Only proceed when gating is initialized AND we're safe to write.
+		// gating represents the minimum slot currently in use by workers.
+		if gating != notStarted && wrapSlot < gating {
 			return nil
 		}
+
 		spinCount++
-		runtime.Gosched()
+		if spinCount < maxSpinBeforeSleep {
+			runtime.Gosched()
+		} else {
+			time.Sleep(time.Microsecond * 4)
+			spinCount = 0
+		}
 	}
 }
 
@@ -270,13 +270,6 @@ func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
 //   - Maintains FIFO ordering of tasks
 //   - Applies back-pressure per-task (may block between submissions)
 //   - Returns partial success count if an error occurs mid-batch
-//
-// Returns the number of successfully submitted tasks and any error encountered.
-// On error, (n, err) indicates n tasks were submitted before the failure.
-//
-// Note: This implementation doesn't claim sequences in bulk, which would be
-// more efficient but more complex. For high-throughput bulk submission,
-// consider using Submit in a goroutine pool or the batch-optimized MPMC strategy.
 func (l *lmaxStrategy[T, R]) SubmitBatch(tasks []*types.SubmittedTask[T, R]) (int, error) {
 	n := 0
 	for _, t := range tasks {
@@ -335,15 +328,15 @@ func (l *lmaxStrategy[T, R]) drain(ctx context.Context, workerID int64, executor
 			continue
 		}
 
-		// Process claimed tasks
+		l.workerSeqs[workerID].set(nextSeq)
 		for seq := nextSeq; seq <= end; seq++ {
 			slot := &l.ring[seq&l.mask]
 			if atomic.LoadUint64(&slot.sequence) != seq {
 				if processAll {
-					l.workerSeqs[workerID].set(seq)
+					l.workerSeqs[workerID].set(seq + 1)
 					continue
 				} else {
-					l.workerSeqs[workerID].set(seq - 1)
+					l.workerSeqs[workerID].set(seq)
 					l.updateGatingSequence()
 					return
 				}
@@ -352,7 +345,7 @@ func (l *lmaxStrategy[T, R]) drain(ctx context.Context, workerID int64, executor
 			if slot.task != nil {
 				_ = l.runner.Execute(ctx, slot.task, executor, h, nil)
 			}
-			l.workerSeqs[workerID].set(seq)
+			l.workerSeqs[workerID].set(seq + 1)
 		}
 
 		l.updateGatingSequence()
@@ -362,6 +355,24 @@ func (l *lmaxStrategy[T, R]) drain(ctx context.Context, workerID int64, executor
 	}
 }
 
+// resolveSeq attempts to claim a batch of sequences for processing.
+//
+// This method coordinates multiple workers competing to claim work from the ring buffer.
+// It uses Compare-And-Swap (CAS) to atomically advance the consumer sequence, ensuring
+// each batch is claimed by exactly one worker.
+//
+// Returns:
+//   - start: The first sequence number in the claimed batch
+//   - end: The last sequence number in the claimed batch (inclusive)
+//   - correct: true if the batch was successfully claimed, false otherwise
+//
+// Behavior:
+//   - Returns (notStarted, 0, false) if no work is available (nothing published yet or all caught up)
+//   - Returns (start, end, false) if the CAS failed (another worker claimed this batch)
+//   - Returns (start, end, true) on successful claim
+//
+// The batch size is limited by lmxConsumerBatchSize to balance throughput and latency.
+// Larger batches reduce CAS contention but may increase per-task latency.
 func (l *lmaxStrategy[T, R]) resolveSeq() (start, end uint64, correct bool) {
 	producer := l.tail.get()
 	consumer := l.consumerSeq.get()
@@ -386,11 +397,17 @@ func (l *lmaxStrategy[T, R]) resolveSeq() (start, end uint64, correct bool) {
 func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, executor types.ProcessFunc[T, R], h types.ResultHandler[T, R]) error {
 	start, end, ok := l.resolveSeq()
 	if !ok {
-		// No work available - just yield and let other workers proceed
-		// Do NOT update workerSeq here - that would skip unprocessed tasks
 		runtime.Gosched()
 		return nil
 	}
+
+	// Set workerSeq BEFORE processing to prevent gating from advancing
+	// past slots we're about to read. This tells the producer "I'm using slot 'start'".
+	l.workerSeqs[workerID].set(start)
+
+	// Update gating immediately so producer can make progress.
+	// Without this, producer would wait forever if it wraps before any task completes.
+	l.updateGatingSequence()
 
 	for i := start; i <= end; i++ {
 		if err := l.waitForProducer(ctx, i); err != nil {
@@ -402,8 +419,11 @@ func (l *lmaxStrategy[T, R]) consume(ctx context.Context, workerID int64, execut
 			return err
 		}
 
-		l.workerSeqs[workerID].set(i)
+		// Set to i+1 to indicate "I've finished slot i, now at slot i+1"
+		// This allows producer to overwrite slot i immediately after we're done
+		l.workerSeqs[workerID].set(i + 1)
 	}
+
 	l.updateGatingSequence()
 	return nil
 }
@@ -437,48 +457,46 @@ func (l *lmaxStrategy[T, R]) waitForProducer(ctx context.Context, seq uint64) er
 
 // updateGatingSequence recalculates and updates the gating sequence.
 //
-// The gating sequence is the minimum progress across all workers. It serves
-// as the back-pressure mechanism: producers cannot write to slots where
+// The gating sequence controls back-pressure: producers cannot write to slots where
 // sequence > gatingSeq + capacity (would overwrite unconsumed data).
 //
-// Workers at notStarted are treated as being at the consumer cursor to prevent
-// blocking the producer before they start consuming.
+// Algorithm:
+// 1. Find the minimum workerSeq among workers that have actually processed tasks
+// 2. If no workers have processed anything yet, do NOT update gating
+//
+// Workers at notStarted are SKIPPED because they haven't consumed any slots yet.
+// We do NOT use consumerSeq as a fallback because it only tracks what's CLAIMED,
+// not what's actually PROCESSED. Using claimed sequences would be unsafe.
 func (l *lmaxStrategy[T, R]) updateGatingSequence() {
 	if len(l.workerSeqs) == 0 {
 		return
 	}
 
-	minSeq := uint64(notStarted) // Start with max uint64
-	initialized := false
+	var minSeq = notStarted
+	foundActiveWorker := false
 
 	for i := 0; i < len(l.workerSeqs); i++ {
 		seq := l.workerSeqs[i].get()
 
 		if seq == notStarted {
-			minSeq = notStarted
-			initialized = true
-			break
+			continue
 		}
 
-		if !initialized {
+		if !foundActiveWorker || seq < minSeq {
 			minSeq = seq
-			initialized = true
-		} else {
-			if seq < minSeq { // Standard min finding
-				minSeq = seq
-			}
+			foundActiveWorker = true
 		}
 	}
 
-	if !initialized {
+	// If no workers have processed anything, don't update gating.
+	// The producer will wait until at least one worker makes progress.
+	if !foundActiveWorker {
 		return
 	}
 
-	// CAS loop to update gating sequence
 	for {
 		old := l.gatingSeq.get()
-		// Only update if we are advancing OR if we are initializing from notStarted
-		if old == notStarted || (minSeq != notStarted && minSeq > old) {
+		if old == notStarted || minSeq > old {
 			if l.gatingSeq.cas(old, minSeq) {
 				return
 			}

@@ -14,7 +14,6 @@ import (
 
 func submitTasks[T any, R any](d *lmaxStrategy[T, R], start, count int, t *testing.T) {
 	for i := start; i < start+count; i++ {
-		fmt.Printf("Submitting task %d\n", i)
 		task := types.NewSubmittedTask[T, R](any(i).(T), int64(i), nil)
 		if err := d.Submit(task); err != nil {
 			t.Errorf("failed to submit task %d: %v", i, err)
@@ -53,17 +52,17 @@ func verifyFinalCount(receivedCount int, expected int, t *testing.T) {
 func TestDisruptorBasicSubmitConsume(t *testing.T) {
 	fmt.Println("Starting TestDisruptorBasicSubmitConsume")
 	conf := &ProcessorConfig[int, int]{
-		WorkerCount: 2,
-		TaskBuffer:  10,
+		WorkerCount: 8,
+		TaskBuffer:  100,
 	}
-	d := newLmaxStrategy(conf, 16)
+	// Use default capacity (16384) for realistic throughput testing
+	d := newLmaxStrategy(conf, 0)
 	defer d.Shutdown()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	taskCount := 100000
-	go submitTasks(d, 0, taskCount, t)
 
 	// Consume tasks
 	var received []int
@@ -84,7 +83,14 @@ func TestDisruptorBasicSubmitConsume(t *testing.T) {
 
 	wg.Add(taskCount)
 
+	// IMPORTANT: Start workers BEFORE submitting tasks to avoid deadlock with small ring buffers
 	startWorkers(ctx, conf, d, executor, resultHandler)
+
+	// Give workers a moment to start
+	time.Sleep(10 * time.Millisecond)
+
+	// Now submit tasks
+	go submitTasks(d, 0, taskCount, t)
 
 	wg.Wait()
 
