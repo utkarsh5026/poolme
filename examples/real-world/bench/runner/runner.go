@@ -35,8 +35,9 @@ var (
 	allStrategies = []string{
 		"Channel",
 		"Work-Stealing",
-		"MPMC Queue",
+
 		"LMAX Disruptor",
+		"MPMC Queue",
 		"Priority Queue",
 		"Skip List",
 		"Bitmask",
