@@ -1,4 +1,4 @@
-.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet gosec install bench-uniform bench-skewed bench-priority bench-burst bench-small-pool bench-all bench-io-api bench-io-database bench-io-file bench-io-mixed bench-io-all bench-pipeline-etl bench-pipeline-streaming bench-pipeline-batch bench-pipeline-all bench-comprehensive
+.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet gosec pre-commit install bench-uniform bench-skewed bench-priority bench-burst bench-small-pool bench-all bench-io-api bench-io-database bench-io-file bench-io-mixed bench-io-all bench-pipeline-etl bench-pipeline-streaming bench-pipeline-batch bench-pipeline-all bench-comprehensive
 
 # Variables
 BINARY_NAME=poolme
@@ -50,6 +50,7 @@ help:
 	@echo "  make vet               - Run go vet"
 	@echo "  make gosec             - Run gosec security scanner"
 	@echo "  make check             - Run fmt, vet, lint, and gosec"
+	@echo "  make pre-commit        - Run all checks and tests before committing"
 	@echo ""
 	@echo "$(GREEN)CPU Benchmark Scenarios:$(NC)"
 	@echo "  make bench-uniform      - Scenario 1: Uniform throughput (500K tasks)"
@@ -215,6 +216,12 @@ gosec:
 ## check: Run fmt, vet, lint, and gosec
 check: fmt vet lint gosec
 	@echo "$(GREEN)All checks passed!$(NC)"
+
+## pre-commit: Run all checks and tests before committing
+pre-commit: fmt vet lint gosec test
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║  ✅ Pre-commit checks passed! Safe to commit.              ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
 
 ## clean: Clean build artifacts and test cache
 clean:
