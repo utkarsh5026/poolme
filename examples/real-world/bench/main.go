@@ -13,9 +13,9 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/olekukonko/tablewriter"
-	"github.com/utkarsh5026/poolme/pool"
+	"github.com/utkarsh5026/gopool/pool"
 
-	"github.com/utkarsh5026/poolme/examples/real-world/common/runner"
+	"github.com/utkarsh5026/gopool/examples/real-world/common/runner"
 )
 
 // Task represents a unit of work with configurable CPU complexity

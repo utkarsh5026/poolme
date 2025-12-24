@@ -1,4 +1,4 @@
-module github.com/utkarsh5026/poolme
+module github.com/utkarsh5026/gopool
 
 go 1.24.0
 

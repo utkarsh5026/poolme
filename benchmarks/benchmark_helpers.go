@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/utkarsh5026/poolme/pool"
+	"github.com/utkarsh5026/gopool/pool"
 )
 
 // strategyConfig defines a benchmark configuration for a scheduling strategy

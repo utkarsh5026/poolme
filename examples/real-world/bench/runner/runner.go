@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/utkarsh5026/poolme/examples/real-world/common/runner"
+	"github.com/utkarsh5026/gopool/examples/real-world/common/runner"
 )
 
 func main() {

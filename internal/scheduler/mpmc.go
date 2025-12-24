@@ -48,7 +48,7 @@ import (
 	"runtime"
 	"sync/atomic"
 
-	"github.com/utkarsh5026/poolme/internal/types"
+	"github.com/utkarsh5026/gopool/internal/types"
 )
 
 // Sentinel errors for MPMC queue operations.

@@ -1,8 +1,8 @@
 package pool
 
 import (
-	"github.com/utkarsh5026/poolme/internal/scheduler"
-	"github.com/utkarsh5026/poolme/internal/types"
+	"github.com/utkarsh5026/gopool/internal/scheduler"
+	"github.com/utkarsh5026/gopool/internal/types"
 )
 
 // ProcessFunc is a function type that defines how individual tasks are processed in the worker pool.
