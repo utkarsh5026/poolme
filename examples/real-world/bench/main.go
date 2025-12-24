@@ -13,7 +13,6 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/olekukonko/tablewriter"
-	"github.com/schollz/progressbar/v3"
 	"github.com/utkarsh5026/poolme/pool"
 
 	"github.com/utkarsh5026/poolme/examples/real-world/common/runner"
@@ -115,7 +114,7 @@ type CPURunner struct {
 	tasks      []Task
 }
 
-func (r *CPURunner) Run(bar *progressbar.ProgressBar) runner.StrategyResult {
+func (r *CPURunner) Run() runner.StrategyResult {
 	ctx := context.Background()
 	wPool := r.selectStrategy()
 	start := time.Now()
@@ -127,10 +126,6 @@ func (r *CPURunner) Run(bar *progressbar.ProgressBar) runner.StrategyResult {
 	}
 
 	elapsed := time.Since(start)
-
-	if bar != nil {
-		_ = bar.Add(1)
-	}
 
 	taskCount := len(r.tasks)
 	throughputTasksPS := float64(taskCount) / elapsed.Seconds()
