@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/public/logo.svg" alt="PoolMe Logo" width="200"/>
+<img src="docs/public/logo.svg" alt="gopool Logo" width="200"/>
 
-<h1>PoolMe</h1>
+<h1>Gopool</h1>
 
 <p align="center">
   <strong>A simple, powerful, and type-safe worker pool for Go</strong>
@@ -31,7 +31,7 @@
     <img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License">
   </a>
   <a href="https://github.com/utkarsh5026/gopool/releases/latest">
-    <img src="https://img.shields.io/github/v/release/utkarsh5026/poolme" alt="Release">
+    <img src="https://img.shields.io/github/v/release/utkarsh5026/gopool" alt="Release">
   </a>
 </p>
 
@@ -137,9 +137,9 @@ func main() {
 
 <br/>
 
-## 💡 Why Choose PoolMe?
+## 💡 Why Choose gopool?
 
-| Feature             | PoolMe                               | Traditional Approaches     |
+| Feature             | gopool                               | Traditional Approaches     |
 | ------------------- | ------------------------------------ | -------------------------- |
 | **Type Safety**     | ✅ Full generic support              | ❌ Interface{} hell        |
 | **Retry Logic**     | ✅ Built-in with exponential backoff | ⚠️ Manual implementation   |
@@ -155,7 +155,7 @@ func main() {
 <div align="center">
 
 <p>
-PoolMe implements <strong>7 distinct scheduling strategies</strong> plus a <strong>Task Fusion wrapper</strong>,<br/>
+gopool implements <strong>7 distinct scheduling strategies</strong> plus a <strong>Task Fusion wrapper</strong>,<br/>
 each optimized for specific use cases and workload characteristics.
 </p>
 
@@ -1010,7 +1010,7 @@ go test -bench=BenchmarkComprehensive_Scenario -benchmem ./benchmarks/
 
 ## 📊 Benchmark Visualization
 
-PoolMe includes a powerful benchmark visualization tool that runs all strategy comparison benchmarks and presents the results in an interactive dark-themed dashboard.
+gopool includes a powerful benchmark visualization tool that runs all strategy comparison benchmarks and presents the results in an interactive dark-themed dashboard.
 
 ### Features
 
@@ -1024,8 +1024,8 @@ PoolMe includes a powerful benchmark visualization tool that runs all strategy c
 
 ```bash
 # Using Docker
-docker build -t poolme-benchviz -f tools/benchviz/Dockerfile .
-docker run -p 8080:8080 -v $(pwd)/benchmark-data:/data poolme-benchviz
+docker build -t gopool-benchviz -f tools/benchviz/Dockerfile .
+docker run -p 8080:8080 -v $(pwd)/benchmark-data:/data gopool-benchviz
 
 # Using Docker Compose
 cd tools/benchviz
@@ -1074,7 +1074,7 @@ This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE
 
 <div align="center">
 
-<img src="docs/public/logo.svg" alt="PoolMe Logo" width="80"/>
+<img src="docs/public/logo.svg" alt="gopool Logo" width="80"/>
 
 <br/><br/>
 
