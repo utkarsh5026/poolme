@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"runtime"
-	"runtime/pprof"
 	"slices"
 	"sort"
 	"time"
@@ -16,25 +15,15 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"github.com/schollz/progressbar/v3"
 	"github.com/utkarsh5026/poolme/pool"
-)
 
-var (
-	allStrategies = []string{
-		"Channel",
-		"Work-Stealing",
-		"MPMC Queue",
-		"LMAX Disruptor",
-		"Priority Queue",
-		"Skip List",
-		"Bitmask",
-	}
+	"github.com/utkarsh5026/poolme/examples/real-world/common/runner"
 )
 
 // Task represents a unit of work with configurable CPU complexity
 type Task struct {
-	ID         int    // Task identifier
-	Complexity int    // CPU work units (iterations of math operations)
-	Weight     string // "Light", "Medium", "Heavy" (for display only)
+	ID         int
+	Complexity int
+	Weight     string
 }
 
 // TaskResult represents the result of processing a task
@@ -43,18 +32,8 @@ type TaskResult struct {
 	ProcessTime time.Duration
 }
 
-// StrategyResult holds the results for a strategy
-type StrategyResult struct {
-	Name             string
-	TotalTime        time.Duration
-	ThroughputMBps   float64
-	ThroughputRowsPS float64
-	Rank             int
-}
-
 var (
 	bold = color.New(color.Bold)
-	red  = color.New(color.FgRed)
 )
 
 func processTask(_ context.Context, task Task) (TaskResult, error) {
@@ -83,8 +62,7 @@ func processTask(_ context.Context, task Task) (TaskResult, error) {
 	}, nil
 }
 
-// generateBalancedTasks creates tasks with uniform complexity.
-// All tasks have the same CPU work, creating a perfectly balanced workload.
+// generateBalancedTasks creates tasks with uniform complexity
 func generateBalancedTasks(count int, complexity int) []Task {
 	tasks := make([]Task, count)
 	for i := range count {
@@ -97,11 +75,7 @@ func generateBalancedTasks(count int, complexity int) []Task {
 	return tasks
 }
 
-// generateImbalancedTasks creates tasks with varying complexity.
-// This creates a realistic workload with different task sizes:
-// - 10% Heavy tasks (10x base complexity)
-// - 20% Medium tasks (5x base complexity)
-// - 70% Light tasks (1x base complexity)
+// generateImbalancedTasks creates tasks with varying complexity
 func generateImbalancedTasks(count int, baseComplexity int) []Task {
 	tasks := make([]Task, count)
 	heavyCount := count * 10 / 100
@@ -127,52 +101,29 @@ func generateImbalancedTasks(count int, baseComplexity int) []Task {
 	return tasks
 }
 
-// generatePriorityTasks creates imbalanced tasks in reversed order.
-// Light tasks are submitted first, heavy tasks last.
-// This tests if priority-based schedulers can reorder tasks for better performance.
+// generatePriorityTasks creates imbalanced tasks in reversed order
 func generatePriorityTasks(count int, baseComplexity int) []Task {
 	tasks := generateImbalancedTasks(count, baseComplexity)
-	slices.Reverse(tasks) // Submit light first, heavy last
+	slices.Reverse(tasks)
 	return tasks
 }
 
-func formatNumber(n int) string {
-	s := fmt.Sprintf("%d", n)
-	result := ""
-	for i, c := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			result += ","
-		}
-		result += string(c)
-	}
-	return result
-}
-
-type Runner struct {
+// CPURunner implements the benchmark runner for CPU workloads
+type CPURunner struct {
 	strategy   string
 	numWorkers int
 	tasks      []Task
 }
 
-func newRunner(strategyName string, tasks []Task, numWorkers int) *Runner {
-	return &Runner{
-		strategy:   strategyName,
-		numWorkers: numWorkers,
-		tasks:      tasks,
-	}
-}
-
-func (r *Runner) Run(bar *progressbar.ProgressBar) StrategyResult {
+func (r *CPURunner) Run(bar *progressbar.ProgressBar) runner.StrategyResult {
 	ctx := context.Background()
 	wPool := r.selectStrategy()
 	start := time.Now()
 
-	// Process all tasks using the batch Process method
-	// This handles submission and result collection internally, avoiding deadlocks
-	_, err := wPool.Process(ctx, r.tasks, processTask)
+	results, err := wPool.Process(ctx, r.tasks, processTask)
 	if err != nil {
-		_, _ = red.Printf("Error processing %s: %v\n", r.strategy, err)
-		return StrategyResult{Name: r.strategy}
+		_, _ = runner.Red.Printf("Error processing %s: %v\n", r.strategy, err)
+		return runner.StrategyResult{Name: r.strategy}
 	}
 
 	elapsed := time.Since(start)
@@ -184,15 +135,26 @@ func (r *Runner) Run(bar *progressbar.ProgressBar) StrategyResult {
 	taskCount := len(r.tasks)
 	throughputTasksPS := float64(taskCount) / elapsed.Seconds()
 
-	return StrategyResult{
+	latencies := make([]time.Duration, 0, len(results))
+	for _, result := range results {
+		latencies = append(latencies, result.ProcessTime)
+	}
+	slices.Sort(latencies)
+
+	p50, p95, p99 := calculatePercentiles(latencies)
+
+	return runner.StrategyResult{
 		Name:             r.strategy,
 		TotalTime:        elapsed,
-		ThroughputMBps:   0,
+		ThroughputMBPS:   0,
 		ThroughputRowsPS: throughputTasksPS,
+		P50Latency:       p50,
+		P95Latency:       p95,
+		P99Latency:       p99,
 	}
 }
 
-func (r *Runner) selectStrategy() *pool.WorkerPool[Task, TaskResult] {
+func (r *CPURunner) selectStrategy() *pool.WorkerPool[Task, TaskResult] {
 	switch r.strategy {
 	case "Work-Stealing":
 		return pool.NewWorkerPool[Task, TaskResult](
@@ -235,69 +197,60 @@ func (r *Runner) selectStrategy() *pool.WorkerPool[Task, TaskResult] {
 	}
 }
 
-// calculateStats computes median time from multiple iterations
-func calculateStats(strategyName string, results []StrategyResult) StrategyResult {
-	if len(results) == 0 {
-		return StrategyResult{Name: strategyName}
+func calculatePercentiles(sortedLatencies []time.Duration) (p50, p95, p99 time.Duration) {
+	if len(sortedLatencies) == 0 {
+		return 0, 0, 0
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].TotalTime < results[j].TotalTime
-	})
+	n := len(sortedLatencies)
+	p50Idx := n * 50 / 100
+	p95Idx := n * 95 / 100
+	p99Idx := n * 99 / 100
 
-	medianIdx := len(results) / 2
-	median := results[medianIdx]
-
-	return StrategyResult{
-		Name:             strategyName,
-		TotalTime:        median.TotalTime,
-		ThroughputMBps:   median.ThroughputMBps,
-		ThroughputRowsPS: median.ThroughputRowsPS,
+	if p50Idx >= n {
+		p50Idx = n - 1
 	}
+	if p95Idx >= n {
+		p95Idx = n - 1
+	}
+	if p99Idx >= n {
+		p99Idx = n - 1
+	}
+
+	return sortedLatencies[p50Idx], sortedLatencies[p95Idx], sortedLatencies[p99Idx]
 }
 
-// printIterationStats prints detailed statistics for multiple iterations
-func printIterationStats(results []StrategyResult) {
-	if len(results) <= 1 {
-		return
+func printConfiguration(numWorkers int, numTasks int, workload string) {
+	complexity := *complexityFlag
+
+	_, _ = bold.Println("⚙️  Configuration:")
+	fmt.Printf("  Workers:    %d (using %d CPU cores)\n", numWorkers, runtime.NumCPU())
+	fmt.Printf("  Tasks:      %s concurrent tasks\n", runner.FormatNumber(numTasks))
+	fmt.Printf("  Complexity: %s iterations per task\n", runner.FormatNumber(complexity))
+	fmt.Printf("  Workload:   %s\n", workload)
+	fmt.Printf("  Strategies: 7 schedulers\n")
+	fmt.Println()
+
+	_, _ = bold.Println("📊 Workload Distribution:")
+	switch workload {
+	case "balanced":
+		fmt.Printf("  • All %s tasks have equal complexity (%s iterations)\n",
+			runner.FormatNumber(numTasks), runner.FormatNumber(complexity))
+	case "imbalanced":
+		fmt.Printf("  • 10%% Heavy tasks (%s tasks × %s iterations)\n",
+			runner.FormatNumber(numTasks*10/100), runner.FormatNumber(complexity*10))
+		fmt.Printf("  • 20%% Medium tasks (%s tasks × %s iterations)\n",
+			runner.FormatNumber(numTasks*20/100), runner.FormatNumber(complexity*5))
+		fmt.Printf("  • 70%% Light tasks (%s tasks × %s iterations)\n",
+			runner.FormatNumber(numTasks*70/100), runner.FormatNumber(complexity))
+	case "priority":
+		fmt.Printf("  • Imbalanced workload submitted in reversed order (light → heavy)\n")
+		fmt.Printf("  • Tests if priority schedulers reorder tasks effectively\n")
 	}
-
-	times := make([]time.Duration, len(results))
-	for i, r := range results {
-		times[i] = r.TotalTime
-	}
-
-	// Sort for percentile calculations
-	slices.Sort(times)
-
-	mini := times[0]
-	maxi := times[len(times)-1]
-	median := times[len(times)/2]
-
-	// Calculate mean
-	var sum time.Duration
-	for _, t := range times {
-		sum += t
-	}
-	mean := sum / time.Duration(len(times))
-
-	// Calculate standard deviation
-	var variance float64
-	for _, t := range times {
-		diff := float64(t - mean)
-		variance += diff * diff
-	}
-	stddev := time.Duration(math.Sqrt(variance / float64(len(times))))
-
-	fmt.Printf("    Min: %v | Median: %v | Mean: %v | Max: %v | StdDev: %v\n",
-		mini.Round(time.Millisecond),
-		median.Round(time.Millisecond),
-		mean.Round(time.Millisecond),
-		maxi.Round(time.Millisecond),
-		stddev.Round(time.Millisecond))
+	fmt.Println()
 }
 
-func printResults(results []StrategyResult) {
+func printResults(results []runner.StrategyResult) {
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].TotalTime < results[j].TotalTime
 	})
@@ -309,15 +262,15 @@ func printResults(results []StrategyResult) {
 	printComparisonTable(results)
 }
 
-func printComparisonTable(results []StrategyResult) {
-	fmt.Println()
-	_, _ = bold.Println("📊 SCHEDULER PERFORMANCE - Tasks/Second")
-	fmt.Println()
-
-	fastestTime := results[0].TotalTime
+func printComparisonTable(results []runner.StrategyResult) {
+	_, _ = bold.Println("═══════════════════════════════════════════════════════════")
+	_, _ = bold.Println("📊 THROUGHPUT COMPARISON")
+	_, _ = bold.Println("═══════════════════════════════════════════════════════════")
 
 	table := tablewriter.NewWriter(os.Stdout)
-	table.Header("Rank", "Scheduler", "Time", "Tasks/sec", "vs Fastest")
+	table.Header("Rank", "Scheduler", "Total Time", "Tasks/sec", "vs Fastest")
+
+	fastestTime := results[0].TotalTime.Seconds()
 
 	for _, r := range results {
 		rankIcon := fmt.Sprintf("%d", r.Rank)
@@ -330,203 +283,91 @@ func printComparisonTable(results []StrategyResult) {
 			rankIcon = "🥉"
 		}
 
-		vsFastest := float64(r.TotalTime) / float64(fastestTime)
-		vsFastestStr := fmt.Sprintf("%.2fx", vsFastest)
+		timeStr := r.TotalTime.Round(time.Millisecond).String()
+		throughputStr := runner.FormatNumber(int(r.ThroughputRowsPS))
+
+		var comparison string
 		if r.Rank == 1 {
-			vsFastestStr = "baseline"
+			comparison = "baseline"
+		} else {
+			pct := ((r.TotalTime.Seconds() / fastestTime) - 1) * 100
+			comparison = fmt.Sprintf("+%.1f%%", pct)
 		}
 
-		_ = table.Append(
-			rankIcon,
-			r.Name,
-			r.TotalTime.Round(time.Millisecond).String(),
-			formatNumber(int(r.ThroughputRowsPS)),
-			vsFastestStr,
-		)
+		_ = table.Append(rankIcon, r.Name, timeStr, throughputStr, comparison)
 	}
 
 	_ = table.Render()
-}
-
-func printConfiguration(numWorkers int, numTasks int, complexity int, workload string) {
-	_, _ = bold.Println("⚙️  Configuration:")
-	fmt.Printf("  Workers:    %d (using %d CPU cores)\n", numWorkers, runtime.NumCPU())
-	fmt.Printf("  Tasks:      %s concurrent tasks\n", formatNumber(numTasks))
-	fmt.Printf("  Complexity: %s iterations per task\n", formatNumber(complexity))
-	fmt.Printf("  Workload:   %s\n", workload)
-	fmt.Printf("  Strategies: 7 schedulers\n")
+	fmt.Println()
 	fmt.Println()
 
-	_, _ = bold.Println("📊 Workload Distribution:")
-	switch workload {
-	case "balanced":
-		fmt.Printf("  • All %s tasks have equal complexity (%s iterations)\n", formatNumber(numTasks), formatNumber(complexity))
-	case "imbalanced":
-		fmt.Printf("  • 10%% Heavy tasks (%s tasks × %s iterations)\n", formatNumber(numTasks*10/100), formatNumber(complexity*10))
-		fmt.Printf("  • 20%% Medium tasks (%s tasks × %s iterations)\n", formatNumber(numTasks*20/100), formatNumber(complexity*5))
-		fmt.Printf("  • 70%% Light tasks (%s tasks × %s iterations)\n", formatNumber(numTasks*70/100), formatNumber(complexity))
-	case "priority":
-		fmt.Printf("  • Imbalanced workload submitted in reversed order (light → heavy)\n")
-		fmt.Printf("  • Tests if priority schedulers reorder tasks effectively\n")
+	_, _ = bold.Println("═══════════════════════════════════════════════════════════")
+	_, _ = bold.Println("⚡ LATENCY COMPARISON")
+	_, _ = bold.Println("═══════════════════════════════════════════════════════════")
+
+	latencyTable := tablewriter.NewWriter(os.Stdout)
+	latencyTable.Header("Rank", "Scheduler", "P50 (median)", "P95", "P99")
+
+	for _, r := range results {
+		rankIcon := fmt.Sprintf("%d", r.Rank)
+		switch r.Rank {
+		case 1:
+			rankIcon = "🥇"
+		case 2:
+			rankIcon = "🥈"
+		case 3:
+			rankIcon = "🥉"
+		}
+
+		_ = latencyTable.Append(
+			rankIcon,
+			r.Name,
+			runner.FormatLatency(r.P50Latency),
+			runner.FormatLatency(r.P95Latency),
+			runner.FormatLatency(r.P99Latency),
+		)
 	}
+
+	_ = latencyTable.Render()
 	fmt.Println()
 }
 
-func getStrategiesToRun(isolated string, iterations int, warmup int) []string {
-	if isolated != "" {
-		found := slices.Contains(allStrategies, isolated)
-		if !found {
-			_, _ = red.Printf("Error: Unknown strategy '%s'\n", isolated)
-			fmt.Println("Available strategies:", allStrategies)
-			os.Exit(1)
-		}
-		fmt.Printf("🔬 SINGLE STRATEGY MODE: Testing '%s' scheduler\n", isolated)
-		if iterations > 1 {
-			fmt.Printf("  Running %d iterations with %d warmup runs\n", iterations, warmup)
-		}
-		fmt.Println()
-		return []string{isolated}
-	}
-	return allStrategies
-}
-
-func makeProgressBar(strategies []string) *progressbar.ProgressBar {
-	return progressbar.NewOptions(len(strategies),
-		progressbar.OptionSetDescription("Testing strategies"),
-		progressbar.OptionSetWidth(50),
-		progressbar.OptionShowCount(),
-		progressbar.OptionShowIts(),
-		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "█",
-			SaucerHead:    "█",
-			SaucerPadding: "░",
-			BarStart:      "│",
-			BarEnd:        "│",
-		}),
-		progressbar.OptionEnableColorCodes(true),
-		progressbar.OptionSetWriter(os.Stderr),          // Use stderr for better terminal support
-		progressbar.OptionThrottle(65*time.Millisecond), // Reduce update frequency
-		progressbar.OptionClearOnFinish(),               // Clear progress bar when done
-	)
-}
+var complexityFlag *int
 
 func main() {
-	// Enable ANSI escape sequences on Windows for progress bar support
-	enableWindowsANSI()
+	runner.EnableWindowsANSI()
 
-	tasksFlag := flag.Int("tasks", 100_000, "Number of tasks to process (default: 100,000)")
-	workersFlag := flag.Int("workers", 0, "Number of workers (0 = auto-detect, max 8)")
-	complexityFlag := flag.Int("complexity", 10_000, "Base CPU work per task in iterations (default: 10,000)")
-	workloadFlag := flag.String("workload", "balanced", "Workload mode: 'balanced' (all tasks equal), 'imbalanced' (varied task sizes), or 'priority' (reversed order)")
-	strategyFlag := flag.String("strategy", "", "Run a specific scheduler strategy (e.g., 'Work-Stealing', 'MPMC Queue'). If empty, runs all strategies")
-	iterationsFlag := flag.Int("iterations", 1, "Number of iterations to run per strategy (for statistical analysis)")
-	warmupFlag := flag.Int("warmup", 0, "Number of warmup iterations before measurement")
-	cpuProfileFlag := flag.String("cpuprofile", "", "Write CPU profile to file")
-	memProfileFlag := flag.String("memprofile", "", "Write memory profile to file")
+	commonFlags := runner.DefineCommonFlags()
+	complexityFlag = flag.Int("complexity", 10_000, "Base CPU work per task in iterations (default: 10,000)")
 	flag.Parse()
 
-	if *cpuProfileFlag != "" {
-		f, err := os.Create(*cpuProfileFlag)
-		if err != nil {
-			_, _ = red.Printf("Error creating CPU profile: %v\n", err)
-			os.Exit(1)
-		}
-		defer func(f *os.File) {
-			err := f.Close()
-			if err != nil {
-				_, _ = red.Printf("Error closing memory file: %v\n", err)
-			}
-		}(f)
+	framework := &runner.BenchmarkFramework[Task, TaskResult]{
+		Name:          "CPU-Bound Scheduler Benchmark",
+		AllStrategies: runner.AllStrategies,
 
-		if err := pprof.StartCPUProfile(f); err != nil {
-			_, _ = red.Printf("Error starting CPU profile: %v\n", err)
-			os.Exit(1)
-		}
-		defer pprof.StopCPUProfile()
-		fmt.Printf("CPU profiling enabled, writing to: %s\n", *cpuProfileFlag)
+		GenerateTasks: func(workload string, count int) []Task {
+			switch workload {
+			case "priority":
+				return generatePriorityTasks(count, *complexityFlag)
+			case "imbalanced":
+				return generateImbalancedTasks(count, *complexityFlag)
+			default: // "balanced"
+				return generateBalancedTasks(count, *complexityFlag)
+			}
+		},
+
+		NewRunner: func(strategy string, tasks []Task, workers int) runner.BenchmarkRunner[Task, TaskResult] {
+			return &CPURunner{
+				strategy:   strategy,
+				tasks:      tasks,
+				numWorkers: workers,
+			}
+		},
+
+		PrintConfig:    printConfiguration,
+		PrintResults:   printResults,
+		CalculateStats: runner.CalculateStatsWithLatencyAveraging,
 	}
 
-	var memProfileFile *os.File
-	if *memProfileFlag != "" {
-		var err error
-		memProfileFile, err = os.Create(*memProfileFlag)
-		if err != nil {
-			_, _ = red.Printf("Error creating memory profile: %v\n", err)
-			os.Exit(1)
-		}
-		defer func() {
-			runtime.GC()
-			if err := pprof.WriteHeapProfile(memProfileFile); err != nil {
-				_, _ = red.Printf("Error writing memory profile: %v\n", err)
-			}
-			if err := memProfileFile.Close(); err != nil {
-				_, _ = red.Printf("Error closing memory file: %v\n", err)
-			}
-		}()
-		fmt.Printf("Memory profiling enabled, writing to: %s\n", *memProfileFlag)
-	}
-
-	numWorkers := min(runtime.NumCPU(), *workersFlag)
-
-	// Generate tasks based on workload mode
-	var tasks []Task
-	switch *workloadFlag {
-	case "priority":
-		tasks = generatePriorityTasks(*tasksFlag, *complexityFlag)
-	case "imbalanced":
-		tasks = generateImbalancedTasks(*tasksFlag, *complexityFlag)
-	default: // "balanced"
-		tasks = generateBalancedTasks(*tasksFlag, *complexityFlag)
-	}
-
-	printConfiguration(numWorkers, len(tasks), *complexityFlag, *workloadFlag)
-
-	strategies := getStrategiesToRun(*strategyFlag, *iterationsFlag, *warmupFlag)
-
-	results := make([]StrategyResult, 0, len(strategies))
-
-	_, _ = bold.Println("Running Benchmarks...")
-	fmt.Println()
-
-	bar := makeProgressBar(strategies)
-
-	for _, strategy := range strategies {
-		if *warmupFlag > 0 {
-			for w := 0; w < *warmupFlag; w++ {
-				r := newRunner(strategy, tasks, numWorkers)
-				_ = r.Run(nil)
-				runtime.GC() // Force GC between warmup runs
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-
-		iterationResults := make([]StrategyResult, 0, *iterationsFlag)
-		for iter := 0; iter < *iterationsFlag; iter++ {
-			bar.Describe(fmt.Sprintf("Testing: %s", strategy))
-
-			r := newRunner(strategy, tasks, numWorkers)
-			iterationResults = append(iterationResults, r.Run(bar))
-
-			if iter < *iterationsFlag-1 {
-				runtime.GC()
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-
-		var finalResult StrategyResult
-		if *iterationsFlag == 1 {
-			finalResult = iterationResults[0]
-		} else {
-			finalResult = calculateStats(strategy, iterationResults)
-			printIterationStats(iterationResults)
-		}
-
-		results = append(results, finalResult)
-		time.Sleep(time.Millisecond * 300)
-	}
-
-	fmt.Println()
-	fmt.Println()
-
-	printResults(results)
+	framework.Run(commonFlags)
 }
