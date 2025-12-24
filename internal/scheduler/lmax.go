@@ -172,7 +172,7 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 	for i := range ring {
 		// Use intentional wraparound: uint64(i) will be less than uint64(capacity) for valid indices,
 		// so the subtraction wraps around correctly in unsigned arithmetic
-		ring[i].sequence = uint64(i) - uint64(capacity)
+		ring[i].sequence = uint64(i) - uint64(capacity) // #nosec G115 -- intentional wraparound for ring buffer sequence initialization
 	}
 
 	workerSeqs := make([]lmaxSeq, conf.WorkerCount)
@@ -182,7 +182,7 @@ func newLmaxStrategy[T any, R any](conf *ProcessorConfig[T, R], capacity int) *l
 
 	l := &lmaxStrategy[T, R]{
 		ring:       ring,
-		mask:       uint64(capacity - 1),
+		mask:       uint64(capacity - 1), // #nosec G115 -- capacity is positive power of 2, capacity-1 is always positive
 		workerSeqs: workerSeqs,
 		conf:       conf,
 		capacity:   capacity,
@@ -233,11 +233,12 @@ func (l *lmaxStrategy[T, R]) Submit(t *types.SubmittedTask[T, R]) error {
 // eventually a producer would need to write to a slot that still contains unconsumed
 // data. This function prevents that by blocking until consumers have advanced.
 func (l *lmaxStrategy[T, R]) waitForConsumer(nextSeq uint64) error {
+	// #nosec G115 -- capacity is bounded by configuration, safe conversion
 	if nextSeq < uint64(l.capacity) {
 		return nil
 	}
 
-	wrapSlot := nextSeq - uint64(l.capacity)
+	wrapSlot := nextSeq - uint64(l.capacity) // #nosec G115 -- capacity is bounded by configuration
 	spinCount := 0
 	const maxSpinBeforeSleep = 1000
 

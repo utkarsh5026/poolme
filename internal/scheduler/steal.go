@@ -108,7 +108,7 @@ func (w *wsDeque[T, R]) grow(head, tail int64) []*types.SubmittedTask[T, R] {
 
 	newBuf := &dequeBuffer[T, R]{
 		ring: newRing,
-		mask: uint64(newCap - 1),
+		mask: uint64(newCap - 1), // #nosec G115 -- newCap is positive power of 2, newCap-1 is always positive
 	}
 	w.buffer.Store(newBuf)
 	return newRing
@@ -250,7 +250,12 @@ func (s *workSteal[T, R]) Worker(ctx context.Context, workerID int64, executor t
 	localQueue := s.workerQueues[workerID]
 	var missCount, globalCounter int
 
-	rngState := uint64(time.Now().UnixNano()) + uint64(workerID) + 1
+	// Initialize RNG state using absolute value of UnixNano to avoid negative values
+	nanos := time.Now().UnixNano()
+	if nanos < 0 {
+		nanos = -nanos
+	}
+	rngState := uint64(nanos) + uint64(workerID) + 1 // #nosec G115 -- nanos is now positive, workerID is bounded
 
 	drain := func() {
 		s.drain(ctx, localQueue, executor, h)
@@ -357,7 +362,7 @@ func (s *workSteal[T, R]) steal(thiefID int, rngState *uint64) *types.SubmittedT
 	x ^= x >> 17
 	x ^= x << 5
 	*rngState = x
-	startIndex := int(x % uint64(n))
+	startIndex := int(x % uint64(n)) // #nosec G115 -- result of modulo is always < n (worker count), safe for int
 
 	maxAttempts := min(n-1, maxStealAttempts)
 	thiefQueue := s.workerQueues[thiefID]

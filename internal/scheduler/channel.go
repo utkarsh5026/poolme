@@ -272,5 +272,5 @@ func (a *affinityRouter[T, R]) fnvHash(key string) uint32 {
 func (a *affinityRouter[T, R]) Route(t T) int64 {
 	key := a.affinityFunc(t)
 	hash := a.fnvHash(key)
-	return int64(hash % uint32(a.workerCount))
+	return int64(hash % uint32(a.workerCount)) // #nosec G115 -- workerCount is bounded, modulo result fits in uint32 and int64
 }
