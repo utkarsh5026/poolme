@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/utkarsh5026/poolme/internal/cpu"
 	"github.com/utkarsh5026/poolme/internal/scheduler"
@@ -175,9 +176,9 @@ func collect[R any](n int, resChan <-chan *Result[R, int64], onResult func(r *Re
 // process function and result handler. The function automatically closes the result channel
 // once all workers have completed.
 func startWorkers[T, R any](ctx context.Context, conf *processorConfig[T, R], strategy schedulingStrategy[T, R], f ProcessFunc[T, R], h resultHandler[T, R], resChan chan *Result[R, int64]) {
-	debugLog("startWorkers: spawning %d workers", conf.WorkerCount)
 	var wg sync.WaitGroup
 	wg.Add(conf.WorkerCount)
+
 	for i := range conf.WorkerCount {
 		go func(workerID int) {
 			var cleanup func()
@@ -227,6 +228,11 @@ func runScheduler[T, R any](ctx context.Context, conf *processorConfig[T, R], ta
 
 	// Start workers first - required for strategies like channel that need active receivers
 	startWorkers(ctx, conf, s, p, handler, resChan)
+
+	// Brief delay to ensure workers are scheduled and running.
+	// This is important for LMAX and other strategies where the producer
+	// depends on workers to make progress (e.g., updating gating sequences).
+	time.Sleep(time.Millisecond)
 
 	go func() {
 		<-ctx.Done()

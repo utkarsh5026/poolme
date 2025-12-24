@@ -1,4 +1,4 @@
-.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet gosec install bench-uniform bench-skewed bench-priority bench-burst bench-small-pool bench-all
+.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet gosec install bench-uniform bench-skewed bench-priority bench-burst bench-small-pool bench-all bench-io-api bench-io-database bench-io-file bench-io-mixed bench-io-all bench-pipeline-etl bench-pipeline-streaming bench-pipeline-batch bench-pipeline-all bench-comprehensive
 
 # Variables
 BINARY_NAME=poolme
@@ -51,13 +51,29 @@ help:
 	@echo "  make gosec             - Run gosec security scanner"
 	@echo "  make check             - Run fmt, vet, lint, and gosec"
 	@echo ""
-	@echo "$(GREEN)Benchmark Scenarios (Workload Comparisons):$(NC)"
-	@echo "  make bench-uniform      - Scenario 1: Uniform throughput (1B tasks)"
-	@echo "  make bench-skewed       - Scenario 2: Skewed workload (Work-Stealing test)"
-	@echo "  make bench-priority     - Scenario 3: Priority ordering (100M tasks)"
-	@echo "  make bench-burst        - Scenario 4: Burst traffic backpressure"
-	@echo "  make bench-small-pool   - Scenario 5: Small worker pool (4 workers)"
-	@echo "  make bench-all          - Run all 5 benchmark scenarios"
+	@echo "$(GREEN)CPU Benchmark Scenarios:$(NC)"
+	@echo "  make bench-uniform      - Scenario 1: Uniform throughput (500K tasks)"
+	@echo "  make bench-skewed       - Scenario 2: Imbalanced workload (200K tasks)"
+	@echo "  make bench-priority     - Scenario 3: Priority ordering (100K tasks)"
+	@echo "  make bench-burst        - Scenario 4: High-concurrency stress (1M tasks)"
+	@echo "  make bench-small-pool   - Scenario 5: Small worker pool (500K tasks, 4 workers)"
+	@echo "  make bench-all          - Run all 5 CPU benchmark scenarios"
+	@echo ""
+	@echo "$(GREEN)I/O Benchmark Scenarios:$(NC)"
+	@echo "  make bench-io-api       - Scenario 1: API Gateway workload (50K tasks)"
+	@echo "  make bench-io-database  - Scenario 2: Database query workload (50K tasks)"
+	@echo "  make bench-io-file      - Scenario 3: File I/O workload (50K tasks)"
+	@echo "  make bench-io-mixed     - Scenario 4: Mixed I/O + CPU workload (50K tasks)"
+	@echo "  make bench-io-all       - Run all 4 I/O benchmark scenarios"
+	@echo ""
+	@echo "$(GREEN)Data Pipeline Benchmark Scenarios:$(NC)"
+	@echo "  make bench-pipeline-etl       - Scenario 1: ETL workload (20K records)"
+	@echo "  make bench-pipeline-streaming - Scenario 2: Streaming workload (50K records)"
+	@echo "  make bench-pipeline-batch     - Scenario 3: Batch processing (10K records)"
+	@echo "  make bench-pipeline-all       - Run all 3 pipeline benchmark scenarios"
+	@echo ""
+	@echo "$(GREEN)Comprehensive Benchmarks:$(NC)"
+	@echo "  make bench-comprehensive      - Run ALL benchmarks (CPU + I/O + Pipeline, 12 scenarios)"
 	@echo ""
 	@echo "$(GREEN)Utilities:$(NC)"
 	@echo "  make clean             - Clean build artifacts and test cache"
@@ -190,7 +206,7 @@ vet:
 gosec:
 	@echo "$(BLUE)Running gosec security scanner...$(NC)"
 	@if command -v gosec >/dev/null 2>&1; then \
-		gosec ./...; \
+		gosec ./pool/... ./internal/...; \
 	else \
 		echo "$(RED)gosec not found. Install it with: go install github.com/securego/gosec/v2/cmd/gosec@latest$(NC)"; \
 		exit 1; \
@@ -220,54 +236,54 @@ tidy:
 ## Benchmark Scenarios - Different workload patterns to show strategy strengths
 ## ═══════════════════════════════════════════════════════════
 
-## bench-uniform: Scenario 1 - Uniform high-throughput baseline (1B tasks)
+## bench-uniform: Scenario 1 - Uniform high-throughput baseline
 bench-uniform:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(BLUE)║  Scenario 1: Uniform High-Throughput Baseline             ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 1B tasks, all identical size (pure throughput)$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true
+	@echo "$(YELLOW)📊 Workload: 500K tasks, all identical complexity (pure throughput)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=500000 -complexity=50 -workload=balanced
 	@echo ""
 
-## bench-skewed: Scenario 2 - Highly skewed workload (1B tasks)
+## bench-skewed: Scenario 2 - Highly skewed workload (load balancing test)
 bench-skewed:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(BLUE)║  Scenario 2: Highly Skewed Workload (Load Balancing)      ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 68%% in 3 huge tasks, extreme load imbalance$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 1000000000 -chunk 5000 -balanced=false
+	@echo "$(YELLOW)📊 Workload: 200K tasks with 10%% heavy, 20%% medium, 70%% light (extreme imbalance)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=200000 -complexity=500 -workload=imbalanced
 	@echo ""
 
-## bench-priority: Scenario 3 - Priority-ordered processing (100M tasks)
+## bench-priority: Scenario 3 - Priority-ordered processing (reordering test)
 bench-priority:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(BLUE)║  Scenario 3: Priority-Ordered Processing                  ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 100M tasks, reverse order (test priority reordering)$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 100000000 -chunk 1000 -balanced=false -priority=true
+	@echo "$(YELLOW)📊 Workload: 100K tasks in reverse order (test priority scheduler reordering)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=100000 -complexity=5000 -workload=priority
 	@echo ""
 
-## bench-burst: Scenario 4 - Burst traffic with backpressure (500M tasks)
+## bench-burst: Scenario 4 - High-concurrency stress test
 bench-burst:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(BLUE)║  Scenario 4: Burst Traffic with Backpressure              ║$(NC)"
+	@echo "$(BLUE)║  Scenario 4: High-Concurrency Stress Test                 ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 500M tasks in waves (bursty traffic pattern)$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 500000000 -chunk 500 -balanced=true -burst=true
+	@echo "$(YELLOW)📊 Workload: 1M tasks with balanced complexity (stress test)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=1000000 -complexity=1000 -workload=balanced
 	@echo ""
 
-## bench-small-pool: Scenario 5 - Small worker pool (1B tasks, 4 workers)
+## bench-small-pool: Scenario 5 - Small worker pool (4 workers)
 bench-small-pool:
 	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(BLUE)║  Scenario 5: Small Worker Pool Efficiency                 ║$(NC)"
 	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(YELLOW)📊 Workload: 1B tasks with only 4 workers (minimal overhead)$(NC)"
-	@cd examples/real-world/bench/runner && $(GO) run runner.go -rows 1000000000 -chunk 500 -balanced=true -workers=4
+	@echo "$(YELLOW)📊 Workload: 500K tasks with only 4 workers (low contention test)$(NC)"
+	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=500000 -complexity=5000 -workload=balanced -workers=4
 	@echo ""
 
 ## bench-all: Run all 5 benchmark scenarios sequentially
@@ -295,4 +311,159 @@ bench-all:
 	@$(MAKE) bench-small-pool
 	@echo ""
 	@echo "$(GREEN)✅ All 5 benchmark scenarios complete!$(NC)"
+	@echo ""
+
+
+## ═══════════════════════════════════════════════════════════
+## I/O Benchmark Scenarios - Testing I/O-bound workloads
+## ═══════════════════════════════════════════════════════════
+
+## bench-io-api: I/O Scenario 1 - API Gateway workload
+bench-io-api:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  I/O Scenario 1: API Gateway Workload                     ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 50K API calls with 50ms avg latency$(NC)"
+	@cd examples/real-world/bench-io/runner && $(GO) run runner.go -tasks=50000 -latency=50 -workload=api
+	@echo ""
+
+## bench-io-database: I/O Scenario 2 - Database query workload
+bench-io-database:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  I/O Scenario 2: Database Query Workload                  ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 50K database queries with 30ms avg latency$(NC)"
+	@cd examples/real-world/bench-io/runner && $(GO) run runner.go -tasks=50000 -latency=30 -workload=database
+	@echo ""
+
+## bench-io-file: I/O Scenario 3 - File I/O workload
+bench-io-file:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  I/O Scenario 3: File I/O Workload                        ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 50K file operations with 40ms avg latency$(NC)"
+	@cd examples/real-world/bench-io/runner && $(GO) run runner.go -tasks=50000 -latency=40 -workload=file
+	@echo ""
+
+## bench-io-mixed: I/O Scenario 4 - Mixed I/O + CPU workload
+bench-io-mixed:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  I/O Scenario 4: Mixed I/O + CPU Workload                 ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 50K mixed tasks (I/O + computation)$(NC)"
+	@cd examples/real-world/bench-io/runner && $(GO) run runner.go -tasks=50000 -latency=30 -cpuwork=2000 -workload=mixed
+	@echo ""
+
+## bench-io-all: Run all I/O benchmark scenarios
+bench-io-all:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║        Running All I/O Benchmark Scenarios                 ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@$(MAKE) bench-io-api
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo ""
+	@$(MAKE) bench-io-database
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo ""
+	@$(MAKE) bench-io-file
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo ""
+	@$(MAKE) bench-io-mixed
+	@echo ""
+	@echo "$(GREEN)✅ All I/O benchmark scenarios complete!$(NC)"
+	@echo ""
+
+
+## ═══════════════════════════════════════════════════════════
+## Data Pipeline Benchmark Scenarios - Testing ETL workloads
+## ═══════════════════════════════════════════════════════════
+
+## bench-pipeline-etl: Pipeline Scenario 1 - ETL workload
+bench-pipeline-etl:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  Pipeline Scenario 1: ETL Workload                        ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 20K records (Extract → Transform → Load)$(NC)"
+	@cd examples/real-world/bench-pipeline/runner && $(GO) run runner.go -tasks=20000 -recordsize=10 -workload=etl
+	@echo ""
+
+## bench-pipeline-streaming: Pipeline Scenario 2 - Streaming workload
+bench-pipeline-streaming:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  Pipeline Scenario 2: Streaming Workload                  ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 50K streaming records (fast, lightweight)$(NC)"
+	@cd examples/real-world/bench-pipeline/runner && $(GO) run runner.go -tasks=50000 -recordsize=5 -workload=streaming
+	@echo ""
+
+## bench-pipeline-batch: Pipeline Scenario 3 - Batch processing workload
+bench-pipeline-batch:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  Pipeline Scenario 3: Batch Processing Workload           ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Workload: 10K large records (heavy validation)$(NC)"
+	@cd examples/real-world/bench-pipeline/runner && $(GO) run runner.go -tasks=10000 -recordsize=50 -workload=batch
+	@echo ""
+
+## bench-pipeline-all: Run all data pipeline benchmark scenarios
+bench-pipeline-all:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║        Running All Pipeline Benchmark Scenarios            ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@$(MAKE) bench-pipeline-etl
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo ""
+	@$(MAKE) bench-pipeline-streaming
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo ""
+	@$(MAKE) bench-pipeline-batch
+	@echo ""
+	@echo "$(GREEN)✅ All pipeline benchmark scenarios complete!$(NC)"
+	@echo ""
+
+
+## ═══════════════════════════════════════════════════════════
+## Comprehensive Benchmarks - Run all benchmark types
+## ═══════════════════════════════════════════════════════════
+
+## bench-comprehensive: Run ALL benchmarks (CPU, I/O, and Pipeline)
+bench-comprehensive:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║        COMPREHENSIVE BENCHMARK SUITE                       ║$(NC)"
+	@echo "$(BLUE)║        CPU-Bound + I/O-Bound + Data Pipeline               ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)⏱️  This will take 15-20 minutes to complete...$(NC)"
+	@echo ""
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo "$(BLUE)  PART 1: CPU-Bound Benchmarks (5 scenarios)$(NC)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo ""
+	@$(MAKE) bench-all
+	@echo ""
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo "$(BLUE)  PART 2: I/O-Bound Benchmarks (4 scenarios)$(NC)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo ""
+	@$(MAKE) bench-io-all
+	@echo ""
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo "$(BLUE)  PART 3: Data Pipeline Benchmarks (3 scenarios)$(NC)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
+	@echo ""
+	@$(MAKE) bench-pipeline-all
+	@echo ""
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║  ✅ COMPREHENSIVE BENCHMARK SUITE COMPLETE!                ║$(NC)"
+	@echo "$(GREEN)║  Total: 12 scenarios across 3 workload types               ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""

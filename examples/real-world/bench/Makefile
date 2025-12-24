@@ -3,8 +3,8 @@
 # Variables
 GO=go
 PROFILE_DIR=profiles
-PROFILE_ROWS?=10000000
-PROFILE_CHUNK?=5000
+PROFILE_TASKS?=100000
+PROFILE_COMPLEXITY?=10000
 PROFILE_PORT?=8080
 
 # Colors for output
@@ -54,14 +54,14 @@ help:
 	@echo "  make profile-clean                - Clean all profile files"
 	@echo ""
 	@echo "$(YELLOW)Configuration (environment variables):$(NC)"
-	@echo "  PROFILE_ROWS=$(PROFILE_ROWS)    - Number of rows to process"
-	@echo "  PROFILE_CHUNK=$(PROFILE_CHUNK)   - Chunk size"
-	@echo "  PROFILE_PORT=$(PROFILE_PORT)     - Port for pprof web UI"
+	@echo "  PROFILE_TASKS=$(PROFILE_TASKS)       - Number of tasks to process"
+	@echo "  PROFILE_COMPLEXITY=$(PROFILE_COMPLEXITY) - CPU work per task"
+	@echo "  PROFILE_PORT=$(PROFILE_PORT)            - Port for pprof web UI"
 	@echo ""
 	@echo "$(YELLOW)Example:$(NC)"
 	@echo "  make profile-work-stealing"
 	@echo "  make profile-view-cpu-work-stealing"
-	@echo "  PROFILE_ROWS=50000000 make profile-mpmc"
+	@echo "  PROFILE_TASKS=500000 make profile-mpmc"
 	@echo ""
 
 ## ═══════════════════════════════════════════════════════════
@@ -76,8 +76,8 @@ profile-channel:
 	@mkdir -p $(PROFILE_DIR)
 	@$(GO) run . \
 		-strategy="Channel" \
-		-rows=$(PROFILE_ROWS) \
-		-chunk=$(PROFILE_CHUNK) \
+		-tasks=$(PROFILE_TASKS) \
+		-complexity=$(PROFILE_COMPLEXITY) \
 		-cpuprofile=$(PROFILE_DIR)/channel_cpu.prof \
 		-memprofile=$(PROFILE_DIR)/channel_mem.prof
 	@echo ""
@@ -98,8 +98,8 @@ profile-work-stealing:
 	@mkdir -p $(PROFILE_DIR)
 	@$(GO) run . \
 		-strategy="Work-Stealing" \
-		-rows=$(PROFILE_ROWS) \
-		-chunk=$(PROFILE_CHUNK) \
+		-tasks=$(PROFILE_TASKS) \
+		-complexity=$(PROFILE_COMPLEXITY) \
 		-cpuprofile=$(PROFILE_DIR)/work-stealing_cpu.prof \
 		-memprofile=$(PROFILE_DIR)/work-stealing_mem.prof
 	@echo ""
@@ -120,8 +120,8 @@ profile-mpmc:
 	@mkdir -p $(PROFILE_DIR)
 	@$(GO) run . \
 		-strategy="MPMC Queue" \
-		-rows=$(PROFILE_ROWS) \
-		-chunk=$(PROFILE_CHUNK) \
+		-tasks=$(PROFILE_TASKS) \
+		-complexity=$(PROFILE_COMPLEXITY) \
 		-cpuprofile=$(PROFILE_DIR)/mpmc_cpu.prof \
 		-memprofile=$(PROFILE_DIR)/mpmc_mem.prof
 	@echo ""
@@ -142,8 +142,8 @@ profile-lmax:
 	@mkdir -p $(PROFILE_DIR)
 	@$(GO) run . \
 		-strategy="LMAX Disruptor" \
-		-rows=$(PROFILE_ROWS) \
-		-chunk=$(PROFILE_CHUNK) \
+		-tasks=$(PROFILE_TASKS) \
+		-complexity=$(PROFILE_COMPLEXITY) \
 		-cpuprofile=$(PROFILE_DIR)/lmax_cpu.prof \
 		-memprofile=$(PROFILE_DIR)/lmax_mem.prof
 	@echo ""
@@ -164,8 +164,8 @@ profile-priority-queue:
 	@mkdir -p $(PROFILE_DIR)
 	@$(GO) run . \
 		-strategy="Priority Queue" \
-		-rows=$(PROFILE_ROWS) \
-		-chunk=$(PROFILE_CHUNK) \
+		-tasks=$(PROFILE_TASKS) \
+		-complexity=$(PROFILE_COMPLEXITY) \
 		-cpuprofile=$(PROFILE_DIR)/priority-queue_cpu.prof \
 		-memprofile=$(PROFILE_DIR)/priority-queue_mem.prof
 	@echo ""
@@ -186,8 +186,8 @@ profile-skip-list:
 	@mkdir -p $(PROFILE_DIR)
 	@$(GO) run . \
 		-strategy="Skip List" \
-		-rows=$(PROFILE_ROWS) \
-		-chunk=$(PROFILE_CHUNK) \
+		-tasks=$(PROFILE_TASKS) \
+		-complexity=$(PROFILE_COMPLEXITY) \
 		-cpuprofile=$(PROFILE_DIR)/skip-list_cpu.prof \
 		-memprofile=$(PROFILE_DIR)/skip-list_mem.prof
 	@echo ""
@@ -208,8 +208,8 @@ profile-bitmask:
 	@mkdir -p $(PROFILE_DIR)
 	@$(GO) run . \
 		-strategy="Bitmask" \
-		-rows=$(PROFILE_ROWS) \
-		-chunk=$(PROFILE_CHUNK) \
+		-tasks=$(PROFILE_TASKS) \
+		-complexity=$(PROFILE_COMPLEXITY) \
 		-cpuprofile=$(PROFILE_DIR)/bitmask_cpu.prof \
 		-memprofile=$(PROFILE_DIR)/bitmask_mem.prof
 	@echo ""

@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,10 +14,10 @@ import (
 
 func submitTasks[T any, R any](d *lmaxStrategy[T, R], start, count int, t *testing.T) {
 	for i := start; i < start+count; i++ {
-		debugLog("Submitting task %d", i)
 		task := types.NewSubmittedTask[T, R](any(i).(T), int64(i), nil)
 		if err := d.Submit(task); err != nil {
-			t.Fatalf("failed to submit task %d: %v", i, err)
+			t.Errorf("failed to submit task %d: %v", i, err)
+			return
 		}
 	}
 }
@@ -25,7 +27,8 @@ func submitTasksWithIDs[T any, R any](d *lmaxStrategy[T, R], n int, t *testing.T
 		debugLog("Submitting task %d", id)
 		task := types.NewSubmittedTask[T, R](any(id).(T), idFunc(id), nil)
 		if err := d.Submit(task); err != nil {
-			t.Fatalf("failed to submit task %d: %v", id, err)
+			t.Errorf("failed to submit task %d: %v", id, err)
+			return
 		}
 	}
 }
@@ -47,18 +50,19 @@ func verifyFinalCount(receivedCount int, expected int, t *testing.T) {
 
 // TestDisruptorBasicSubmitConsume tests basic submit and consume flow
 func TestDisruptorBasicSubmitConsume(t *testing.T) {
+	fmt.Println("Starting TestDisruptorBasicSubmitConsume")
 	conf := &ProcessorConfig[int, int]{
-		WorkerCount: 2,
-		TaskBuffer:  10,
+		WorkerCount: 8,
+		TaskBuffer:  100,
 	}
-	d := newLmaxStrategy(conf, 16)
+	// Use default capacity (16384) for realistic throughput testing
+	d := newLmaxStrategy(conf, 0)
 	defer d.Shutdown()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	taskCount := 10
-	submitTasks(d, 0, taskCount, t)
+	taskCount := 100000
 
 	// Consume tasks
 	var received []int
@@ -79,7 +83,14 @@ func TestDisruptorBasicSubmitConsume(t *testing.T) {
 
 	wg.Add(taskCount)
 
+	// IMPORTANT: Start workers BEFORE submitting tasks to avoid deadlock with small ring buffers
 	startWorkers(ctx, conf, d, executor, resultHandler)
+
+	// Give workers a moment to start
+	time.Sleep(10 * time.Millisecond)
+
+	// Now submit tasks
+	go submitTasks(d, 0, taskCount, t)
 
 	wg.Wait()
 
@@ -307,11 +318,8 @@ func TestDisruptorShutdown(t *testing.T) {
 	}
 	d := newLmaxStrategy(conf, 64)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
-	taskCount := 20
-	submitTasks(d, 0, taskCount, t)
 
 	var receivedCount atomic.Int32
 	var workerWg sync.WaitGroup
@@ -326,13 +334,17 @@ func TestDisruptorShutdown(t *testing.T) {
 		return val, nil
 	}
 
-	// Start workers with proper exit signaling
+	// Start workers BEFORE submitting tasks (to avoid deadlock)
 	for i := 0; i < conf.WorkerCount; i++ {
 		go func(workerID int) {
 			defer workerWg.Done()
 			_ = d.Worker(ctx, int64(workerID), executor, resultHandler)
 		}(i)
 	}
+
+	// Submit tasks after workers are running
+	taskCount := 200
+	submitTasks(d, 0, taskCount, t)
 
 	// Let workers process some tasks
 	time.Sleep(100 * time.Millisecond)
@@ -350,7 +362,7 @@ func TestDisruptorShutdown(t *testing.T) {
 
 	// Try to submit after shutdown - should fail
 	task := types.NewSubmittedTask[int, int](999, 999, nil)
-	if err := d.Submit(task); err != ErrSchedulerClosed {
+	if err := d.Submit(task); !errors.Is(err, ErrSchedulerClosed) {
 		t.Errorf("expected ErrQueueClosed after shutdown, got %v", err)
 	}
 }

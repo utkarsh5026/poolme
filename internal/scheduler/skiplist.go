@@ -231,7 +231,7 @@ func (sl *skipList[T, R]) insertUnsafe(currentLevel int, task *types.SubmittedTa
 		for i := currentLevel; i < newLevel; i++ {
 			update[i] = sl.head
 		}
-		atomic.StoreInt32(&sl.level, int32(newLevel))
+		atomic.StoreInt32(&sl.level, int32(newLevel)) // #nosec G115 -- newLevel is capped at defaultMaxLevel (32), safe for int32
 	}
 
 	newNode := newSlNode(task, newLevel)
@@ -294,7 +294,7 @@ func (sl *skipList[T, R]) removeNodeUnsafe(node *slNode[T, R]) {
 	for currentLevel > 1 && sl.head.nextAtLevel[currentLevel-1] == nil {
 		currentLevel--
 	}
-	atomic.StoreInt32(&sl.level, int32(currentLevel))
+	atomic.StoreInt32(&sl.level, int32(currentLevel)) // #nosec G115 -- currentLevel is capped at defaultMaxLevel (32), safe for int32
 }
 
 // slStrategy implements the Strategy interface using a skip list for priority-based scheduling.
@@ -436,7 +436,7 @@ func (s *slStrategy[T, R]) drain(ctx context.Context, f types.ProcessFunc[T, R],
 //  2. Counts trailing zeros (geometric distribution with p=0.5)
 //  3. Caps at defaultMaxLevel
 func (sl *skipList[T, R]) randomLevel() int {
-	random := rand.Uint64()
+	random := rand.Uint64() // #nosec G404 -- non-cryptographic use for skip list level distribution
 	level := bits.TrailingZeros64(random) + 1
 	if level > defaultMaxLevel {
 		return defaultMaxLevel

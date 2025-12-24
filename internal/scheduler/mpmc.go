@@ -223,6 +223,7 @@ func (q *mpmcQueue[T]) EnqueueBatch(tasks []T) (int, error) {
 
 		if q.bounded {
 			head := atomic.LoadUint64(&q.head)
+			// #nosec G115 -- capacity is bounded by queue configuration, safe conversion
 			if (tail + count - head) > uint64(q.capacity) {
 				return 0, ErrQueueFull
 			}
@@ -251,12 +252,21 @@ func (q *mpmcQueue[T]) EnqueueBatch(tasks []T) (int, error) {
 				atomic.StoreUint64(&slot.sequence, currentSeq+1)
 			}
 
-			select {
-			case q.notifyC <- signal{}:
-			default:
+			// Send multiple notifications to wake up waiting workers.
+			// We send notifications equal to the number of tasks (up to a reasonable limit)
+			// to ensure multiple workers can wake up and process tasks concurrently.
+			notifyCount := min(int(count), 10) // #nosec G115 -- count is bounded by queue capacity, safe for int
+		loop:
+			for range notifyCount {
+				select {
+				case q.notifyC <- signal{}:
+				default:
+					// Channel full, at least one worker will wake up
+					break loop
+				}
 			}
 
-			return int(count), nil
+			return int(count), nil // #nosec G115 -- count is bounded by queue capacity, safe for int
 		}
 
 		spinCount++
