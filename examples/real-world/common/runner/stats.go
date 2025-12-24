@@ -12,11 +12,20 @@ import (
 // StrategyResult holds the results from running a single strategy
 // This is a superset type used by all benchmarks
 type StrategyResult struct {
-	Name                                           string
-	TotalTime                                      time.Duration
-	Rank                                           int
-	ThroughputRowsPS, ThroughputMBPS               float64
-	AvgLatency, P50Latency, P95Latency, P99Latency time.Duration
+	Name             string        `json:"strategy"`
+	TotalTime        time.Duration `json:"total_time_ns"`
+	TotalTimeStr     string        `json:"total_time,omitempty"`
+	Rank             int           `json:"rank"`
+	ThroughputRowsPS float64       `json:"throughput_rows_ps,omitempty"`
+	ThroughputMBPS   float64       `json:"throughput_mb_ps,omitempty"`
+	AvgLatency       time.Duration `json:"avg_latency_ns,omitempty"`
+	AvgLatencyStr    string        `json:"avg_latency,omitempty"`
+	P50Latency       time.Duration `json:"p50_latency_ns,omitempty"`
+	P50LatencyStr    string        `json:"p50_latency,omitempty"`
+	P95Latency       time.Duration `json:"p95_latency_ns,omitempty"`
+	P95LatencyStr    string        `json:"p95_latency,omitempty"`
+	P99Latency       time.Duration `json:"p99_latency_ns,omitempty"`
+	P99LatencyStr    string        `json:"p99_latency,omitempty"`
 }
 
 // DefaultCalculateStats calculates median stats (simple strategy)
@@ -111,7 +120,7 @@ func PrintIterationStats(results []StrategyResult) {
 }
 
 // GetStrategiesToRun determines which strategies to run based on flags
-func GetStrategiesToRun(allStrategies []string, isolated string, iterations int, warmup int) []string {
+func GetStrategiesToRun(allStrategies []string, isolated string, iterations int, warmup int, silent bool) []string {
 	if isolated != "" {
 		found := slices.Contains(allStrategies, isolated)
 		if !found {
@@ -119,11 +128,13 @@ func GetStrategiesToRun(allStrategies []string, isolated string, iterations int,
 			fmt.Println("Available strategies:", allStrategies)
 			os.Exit(1)
 		}
-		fmt.Printf("🔬 SINGLE STRATEGY MODE: Testing '%s' scheduler\n", isolated)
-		if iterations > 1 {
-			fmt.Printf("  Running %d iterations with %d warmup runs\n", iterations, warmup)
+		if !silent {
+			fmt.Printf("🔬 SINGLE STRATEGY MODE: Testing '%s' scheduler\n", isolated)
+			if iterations > 1 {
+				fmt.Printf("  Running %d iterations with %d warmup runs\n", iterations, warmup)
+			}
+			fmt.Println()
 		}
-		fmt.Println()
 		return []string{isolated}
 	}
 	return allStrategies

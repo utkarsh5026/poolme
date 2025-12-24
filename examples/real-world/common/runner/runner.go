@@ -67,7 +67,7 @@ func runSingleStrategy(strategy string, args []string, config BenchmarkConfig) R
 		Success:  false,
 	}
 
-	cmdArgs := append([]string{"run", ".", "-strategy=" + strategy}, args...)
+	cmdArgs := append([]string{"run", ".", "-strategy=" + strategy, "--output-format=json"}, args...)
 	colorPrintf(Yellow, "  Running: %s\n", strategy)
 
 	cmd := exec.Command("go", cmdArgs...)

@@ -29,14 +29,15 @@ type BenchmarkRunner[T any, R any] interface {
 
 // CommonFlags holds common command-line flags
 type CommonFlags struct {
-	Workers    int
-	Tasks      int
-	Strategy   string
-	Iterations int
-	Warmup     int
-	Workload   string
-	CPUProfile string
-	MemProfile string
+	Workers      int
+	Tasks        int
+	Strategy     string
+	Iterations   int
+	Warmup       int
+	Workload     string
+	CPUProfile   string
+	MemProfile   string
+	OutputFormat string
 }
 
 // DefineCommonFlags defines common flags (but doesn't parse yet)
@@ -52,6 +53,7 @@ func DefineCommonFlags() *CommonFlags {
 	flag.StringVar(&flags.Workload, "workload", "", "Workload type")
 	flag.StringVar(&flags.CPUProfile, "cpuprofile", "", "Write CPU profile to file")
 	flag.StringVar(&flags.MemProfile, "memprofile", "", "Write memory profile to file")
+	flag.StringVar(&flags.OutputFormat, "output-format", "table", "Output format: 'table' or 'json'")
 
 	return flags
 }
@@ -69,12 +71,19 @@ func (f *BenchmarkFramework[T, R]) Run(flags *CommonFlags) {
 
 	tasks := f.GenerateTasks(flags.Workload, flags.Tasks)
 
-	printBenchmarkHeader(f.Name)
-	f.PrintConfig(numWorkers, len(tasks), flags.Workload)
+	if flags.OutputFormat != "json" {
+		printBenchmarkHeader(f.Name)
+		f.PrintConfig(numWorkers, len(tasks), flags.Workload)
+	}
 
-	strategies := GetStrategiesToRun(f.AllStrategies, flags.Strategy, flags.Iterations, flags.Warmup)
+	silent := flags.OutputFormat == "json"
+	strategies := GetStrategiesToRun(f.AllStrategies, flags.Strategy, flags.Iterations, flags.Warmup, silent)
 	results := f.runStrategies(strategies, tasks, numWorkers, flags)
-	f.PrintResults(results)
+	if flags.OutputFormat == "json" {
+		_ = OutputJSON(f.Name, results)
+	} else {
+		f.PrintResults(results)
+	}
 }
 
 // runStrategies executes all strategies with warmup and iterations
@@ -86,10 +95,13 @@ func (f *BenchmarkFramework[T, R]) runStrategies(
 ) []StrategyResult {
 	results := make([]StrategyResult, 0, len(strategies))
 
-	colorPrintLn(Bold, "Running Benchmarks...")
-	fmt.Println()
-
-	bar := MakeProgressBar(strategies)
+	// Only show progress for table output
+	var bar *progressbar.ProgressBar
+	if flags.OutputFormat != "json" {
+		colorPrintLn(Bold, "Running Benchmarks...")
+		fmt.Println()
+		bar = MakeProgressBar(strategies)
+	}
 
 	for _, strategy := range strategies {
 		if flags.Warmup > 0 {
@@ -103,7 +115,9 @@ func (f *BenchmarkFramework[T, R]) runStrategies(
 
 		res := make([]StrategyResult, 0, flags.Iterations)
 		for i := 0; i < flags.Iterations; i++ {
-			bar.Describe(fmt.Sprintf("Testing: %s", strategy))
+			if bar != nil {
+				bar.Describe(fmt.Sprintf("Testing: %s", strategy))
+			}
 
 			runner := f.NewRunner(strategy, tasks, workers)
 			res = append(res, runner.Run(bar))
@@ -123,15 +137,19 @@ func (f *BenchmarkFramework[T, R]) runStrategies(
 			} else {
 				finalResult = DefaultCalculateStats(strategy, res)
 			}
-			PrintIterationStats(res)
+			if flags.OutputFormat != "json" {
+				PrintIterationStats(res)
+			}
 		}
 
 		results = append(results, finalResult)
 		time.Sleep(300 * time.Millisecond)
 	}
 
-	_ = bar.Finish()
-	fmt.Println()
+	if bar != nil {
+		_ = bar.Finish()
+		fmt.Println()
+	}
 
 	return results
 }
