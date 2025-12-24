@@ -5,7 +5,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/utkarsh5026/poolme/internal/types"
+	"github.com/utkarsh5026/gopool/internal/types"
 )
 
 // priorityQueue is a generic min-heap based priority queue used within the worker pool.

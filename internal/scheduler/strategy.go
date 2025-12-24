@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/utkarsh5026/poolme/internal/types"
+	"github.com/utkarsh5026/gopool/internal/types"
 )
 
 // schedulingStrategy defines the behavior for distributing tasks to workers.

@@ -63,7 +63,7 @@ jobs:
             ## Installation
 
             ```sh
-            go get github.com/utkarsh5026/poolme@${{ steps.get_version.outputs.VERSION }}
+            go get github.com/utkarsh5026/gopool@${{ steps.get_version.outputs.VERSION }}
             ```
           draft: false
           prerelease: false

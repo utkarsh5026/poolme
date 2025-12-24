@@ -14,23 +14,23 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/utkarsh5026/poolme/actions/workflows/ci.yml">
-    <img src="https://github.com/utkarsh5026/poolme/actions/workflows/ci.yml/badge.svg" alt="CI">
+  <a href="https://github.com/utkarsh5026/gopool/actions/workflows/ci.yml">
+    <img src="https://github.com/utkarsh5026/gopool/actions/workflows/ci.yml/badge.svg" alt="CI">
   </a>
   <a href="https://golang.org/">
     <img src="https://img.shields.io/badge/Go-%3E%3D%201.18-blue.svg" alt="Go Version">
   </a>
-  <a href="https://pkg.go.dev/github.com/utkarsh5026/poolme">
-    <img src="https://pkg.go.dev/badge/github.com/utkarsh5026/poolme.svg" alt="Go Reference">
+  <a href="https://pkg.go.dev/github.com/utkarsh5026/gopool">
+    <img src="https://pkg.go.dev/badge/github.com/utkarsh5026/gopool.svg" alt="Go Reference">
   </a>
   <br/>
-  <a href="https://goreportcard.com/report/github.com/utkarsh5026/poolme">
-    <img src="https://goreportcard.com/badge/github.com/utkarsh5026/poolme" alt="Go Report Card">
+  <a href="https://goreportcard.com/report/github.com/utkarsh5026/gopool">
+    <img src="https://goreportcard.com/badge/github.com/utkarsh5026/gopool" alt="Go Report Card">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="License">
   </a>
-  <a href="https://github.com/utkarsh5026/poolme/releases/latest">
+  <a href="https://github.com/utkarsh5026/gopool/releases/latest">
     <img src="https://img.shields.io/github/v/release/utkarsh5026/poolme" alt="Release">
   </a>
 </p>
@@ -89,7 +89,7 @@
 ## 📦 Installation
 
 ```bash
-go get github.com/utkarsh5026/poolme
+go get github.com/utkarsh5026/gopool
 ```
 
 **Requirements:** Go 1.18 or higher
@@ -108,7 +108,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/utkarsh5026/poolme/pool"
+    "github.com/utkarsh5026/gopool/pool"
 )
 
 func main() {
@@ -799,7 +799,7 @@ import (
     "log"
     "time"
 
-    "github.com/utkarsh5026/poolme/pool"
+    "github.com/utkarsh5026/gopool/pool"
 )
 
 type APIRequest struct {
@@ -1086,6 +1086,6 @@ If you find this project helpful, please consider giving it a ⭐
 
 <br/>
 
-[Report Bug](https://github.com/utkarsh5026/poolme/issues) • [Request Feature](https://github.com/utkarsh5026/poolme/issues) • [Documentation](https://pkg.go.dev/github.com/utkarsh5026/poolme)
+[Report Bug](https://github.com/utkarsh5026/gopool/issues) • [Request Feature](https://github.com/utkarsh5026/gopool/issues) • [Documentation](https://pkg.go.dev/github.com/utkarsh5026/gopool)
 
 </div>

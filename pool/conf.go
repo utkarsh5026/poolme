@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/utkarsh5026/poolme/internal/algorithms"
-	"github.com/utkarsh5026/poolme/internal/scheduler"
+	"github.com/utkarsh5026/gopool/internal/algorithms"
+	"github.com/utkarsh5026/gopool/internal/scheduler"
 	"golang.org/x/time/rate"
 )
 

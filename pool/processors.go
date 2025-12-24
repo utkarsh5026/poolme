@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/utkarsh5026/poolme/internal/cpu"
-	"github.com/utkarsh5026/poolme/internal/scheduler"
-	"github.com/utkarsh5026/poolme/internal/types"
+	"github.com/utkarsh5026/gopool/internal/cpu"
+	"github.com/utkarsh5026/gopool/internal/scheduler"
+	"github.com/utkarsh5026/gopool/internal/types"
 )
 
 // sliceProcessor orchestrates parallel processing of a slice of tasks with result ordering.

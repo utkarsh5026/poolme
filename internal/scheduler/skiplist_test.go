@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/utkarsh5026/poolme/internal/types"
+	"github.com/utkarsh5026/gopool/internal/types"
 )
 
 // Tests for skipList

@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/utkarsh5026/poolme/internal/scheduler"
-	"github.com/utkarsh5026/poolme/internal/types"
+	"github.com/utkarsh5026/gopool/internal/scheduler"
+	"github.com/utkarsh5026/gopool/internal/types"
 	"golang.org/x/sync/errgroup"
 )
 

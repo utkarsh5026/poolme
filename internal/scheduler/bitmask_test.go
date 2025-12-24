@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/utkarsh5026/poolme/internal/types"
+	"github.com/utkarsh5026/gopool/internal/types"
 )
 
 // Test helpers for bitmask strategy
