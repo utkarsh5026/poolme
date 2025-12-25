@@ -72,7 +72,7 @@ func TestDecorrelatedJitterBackoff_Distribution(t *testing.T) {
 	// Test that multiple instances with the same parameters produce different sequences
 	// This verifies the randomness of the decorrelated jitter
 	delays := make([]time.Duration, 50)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		djb := newDecorrelatedJitterBackoff(initialDelay, maxDelay)
 		djb.NextDelay(0, nil)             // First attempt
 		delays[i] = djb.NextDelay(1, nil) // Second attempt
@@ -154,7 +154,7 @@ func TestDecorrelatedJitterBackoff_ThreadSafety(t *testing.T) {
 	concurrentCalls := 100
 
 	// Run concurrent NextDelay calls
-	for i := 0; i < concurrentCalls; i++ {
+	for i := range concurrentCalls {
 		wg.Add(1)
 		go func(attempt int) {
 			defer wg.Done()
@@ -284,7 +284,7 @@ func TestJitteredBackoff_ThreadSafety(t *testing.T) {
 	var wg sync.WaitGroup
 	concurrentCalls := 100
 
-	for i := 0; i < concurrentCalls; i++ {
+	for i := range concurrentCalls {
 		wg.Add(1)
 		go func(attempt int) {
 			defer wg.Done()
@@ -470,27 +470,24 @@ func TestCalcExponentialDelay_ExponentialGrowth(t *testing.T) {
 
 func BenchmarkDecorrelatedJitterBackoff(b *testing.B) {
 	djb := newDecorrelatedJitterBackoff(100*time.Millisecond, 10*time.Second)
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		djb.NextDelay(i%10, nil)
 	}
 }
 
 func BenchmarkJitteredBackoff(b *testing.B) {
 	jb := newJitteredBackoff(100*time.Millisecond, 10*time.Second, 0.1)
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		jb.NextDelay(i%10, nil)
 	}
 }
 
 func BenchmarkExponentialBackoff(b *testing.B) {
 	eb := newExponentialBackoff(100*time.Millisecond, 10*time.Second)
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		eb.NextDelay(i%10, nil)
 	}
 }
@@ -498,9 +495,8 @@ func BenchmarkExponentialBackoff(b *testing.B) {
 func BenchmarkCalcExponentialDelay(b *testing.B) {
 	initialDelay := 100 * time.Millisecond
 	maxDelay := 10 * time.Second
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		calcExponentialDelay(i%10, initialDelay, maxDelay)
 	}
 }

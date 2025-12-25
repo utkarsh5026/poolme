@@ -380,7 +380,7 @@ func TestFuture_ConcurrentAccess(t *testing.T) {
 		done := make(chan bool, 10)
 
 		// Launch multiple concurrent Get calls
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			go func() {
 				value, key, err := future.Get()
 				if err != nil || value != 999 || key != "concurrent" {
@@ -391,7 +391,7 @@ func TestFuture_ConcurrentAccess(t *testing.T) {
 		}
 
 		// Wait for all goroutines
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			select {
 			case <-done:
 			case <-time.After(500 * time.Millisecond):

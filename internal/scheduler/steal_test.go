@@ -192,7 +192,7 @@ func TestWSDeque_PopFront(t *testing.T) {
 	}
 
 	// Pop in same order (FIFO)
-	for i := 0; i < len(tasks); i++ {
+	for i := range tasks {
 		popped := dq.PopFront()
 		if popped == nil {
 			t.Fatalf("PopFront returned nil at index %d", i)
@@ -243,7 +243,7 @@ func TestWSDeque_Grow(t *testing.T) {
 	}
 
 	// Pop all tasks and verify they're correct
-	for i := 0; i < expectedLen; i++ {
+	for i := range expectedLen {
 		popped := dq.PopBack()
 		if popped == nil {
 			t.Fatalf("PopBack returned nil at iteration %d", i)
@@ -283,7 +283,7 @@ func TestWSDeque_ConcurrentPopBackAndPopFront(t *testing.T) {
 	numTasks := 1000
 
 	// Push tasks
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		task := types.NewSubmittedTask[int, int](i, int64(i), nil)
 		dq.PushBack(task)
 	}
@@ -307,7 +307,7 @@ func TestWSDeque_ConcurrentPopBackAndPopFront(t *testing.T) {
 	// Multiple goroutines steal from front
 	numStealers := 4
 	wg.Add(numStealers)
-	for i := 0; i < numStealers; i++ {
+	for range numStealers {
 		go func() {
 			defer wg.Done()
 			for {
@@ -342,7 +342,7 @@ func TestWSDeque_ConcurrentPopBackAndPopFront(t *testing.T) {
 // TestWSDeque_SingleElementContention tests contention on last element.
 func TestWSDeque_SingleElementContention(t *testing.T) {
 	// This tests the race condition when both owner and stealer try to pop the last element
-	for iteration := 0; iteration < 100; iteration++ {
+	for iteration := range 100 {
 		dq := newWSDeque[int, int](16)
 		task := types.NewSubmittedTask[int, int](42, 1, nil)
 		dq.PushBack(task)
@@ -489,7 +489,7 @@ func TestWorkSteal_SubmitRoundRobin(t *testing.T) {
 	numTasks := 100
 
 	// Submit tasks
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		task := types.NewSubmittedTask[int, int](i, int64(i), nil)
 		err := s.Submit(task)
 		if err != nil {
@@ -535,7 +535,7 @@ func TestWorkSteal_SubmitBatch(t *testing.T) {
 	// Create batch of tasks
 	batchSize := 100
 	tasks := make([]*types.SubmittedTask[int, int], batchSize)
-	for i := 0; i < batchSize; i++ {
+	for i := range batchSize {
 		future := types.NewFuture[int, int64]()
 		tasks[i] = types.NewSubmittedTask(i, int64(i), future)
 	}
@@ -632,7 +632,7 @@ func TestWorkSteal_Worker(t *testing.T) {
 
 	// Submit tasks to the worker's queue BEFORE starting worker to avoid race condition
 	numTasks := 10
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.workerQueues[workerID].PushBack(task)
@@ -667,7 +667,7 @@ func TestWorkSteal_Worker(t *testing.T) {
 	}
 
 	// Verify the results are correct (doubled values)
-	results.Range(func(key, value interface{}) bool {
+	results.Range(func(key, value any) bool {
 		k := key.(int64)
 		v := value.(int)
 		expected := int(k) * 2
@@ -793,7 +793,7 @@ func TestWorkSteal_WorkerContextCancellation(t *testing.T) {
 
 	// Submit some tasks BEFORE starting worker to avoid race condition
 	// (PushBack is only safe when called by the owner worker)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.workerQueues[workerID].PushBack(task)
@@ -1066,7 +1066,7 @@ func TestWorkSteal_StealingUnderLoad(t *testing.T) {
 	// Start workers
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
-	for i := 0; i < numWorkers; i++ {
+	for i := range numWorkers {
 		workerID := int64(i)
 		go func(id int64) {
 			defer wg.Done()
@@ -1139,7 +1139,7 @@ func TestWorkSteal_GlobalQueueFallback(t *testing.T) {
 	}
 
 	// Force more submissions to same worker
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		task := types.NewSubmittedTask[int, int](i+numTasks, int64(i+numTasks), nil)
 		err := s.Submit(task)
 		if err != nil {

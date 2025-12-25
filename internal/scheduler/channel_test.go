@@ -352,7 +352,7 @@ func TestChannelStrategy_Worker(t *testing.T) {
 
 	// Verify the results are correct (doubled values)
 	expectedResults := make(map[int]bool)
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		expectedResults[i*2] = true
 	}
 	for _, result := range results {
@@ -483,7 +483,7 @@ func TestChannelStrategy_WorkerContextCancellation(t *testing.T) {
 	}()
 
 	// Submit some tasks directly to worker's channel
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.taskChans[workerID] <- task
@@ -515,7 +515,7 @@ func TestChannelStrategy_Shutdown(t *testing.T) {
 	s := newChannelStrategy(conf)
 
 	// Submit some tasks
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.Submit(task)

@@ -178,10 +178,10 @@ func TestBitmaskStrategy_Submit(t *testing.T) {
 		wg.Add(goroutines)
 
 		// Submit tasks concurrently
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(start int) {
 				defer wg.Done()
-				for j := 0; j < tasksPerGoroutine; j++ {
+				for j := range tasksPerGoroutine {
 					task := createSimpleTask(start*tasksPerGoroutine+j, int64(start*tasksPerGoroutine+j))
 					_ = strategy.Submit(task)
 				}
@@ -439,7 +439,7 @@ func TestBitmaskStrategy_Worker(t *testing.T) {
 		// Start all workers
 		var wg sync.WaitGroup
 		wg.Add(4)
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			go func(id int) {
 				defer wg.Done()
 				strategy.Worker(ctx, int64(id), executor, handler)
@@ -448,7 +448,7 @@ func TestBitmaskStrategy_Worker(t *testing.T) {
 
 		// Submit tasks
 		taskCount := 20
-		for i := 0; i < taskCount; i++ {
+		for i := range taskCount {
 			_ = strategy.Submit(createSimpleTask(i, int64(i)))
 		}
 
@@ -596,7 +596,7 @@ func TestBitmaskStrategy_AnnounceIdle(t *testing.T) {
 		wg.Add(8)
 
 		// All workers announce idle concurrently
-		for i := 0; i < 8; i++ {
+		for i := range 8 {
 			go func(workerID int) {
 				defer wg.Done()
 				strategy.announceIdle(workerID)
@@ -699,7 +699,7 @@ func TestBitmaskStrategy_Shutdown(t *testing.T) {
 
 		// Start multiple workers
 		done := make(chan error, 4)
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			go func(id int) {
 				done <- strategy.Worker(ctx, int64(id), executor, handler)
 			}(i)
@@ -709,7 +709,7 @@ func TestBitmaskStrategy_Shutdown(t *testing.T) {
 		strategy.Shutdown()
 
 		// All workers should exit
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			select {
 			case <-done:
 				// Success
@@ -853,10 +853,9 @@ func BenchmarkBitmaskStrategy_SubmitBatch(b *testing.B) {
 	}
 
 	// Drain channels in background
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := b.Context()
 
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		go func(ch chan *types.SubmittedTask[simpleTask, int]) {
 			for {
 				select {
@@ -908,11 +907,10 @@ func BenchmarkBitmaskStrategy_WorkerProcessing(b *testing.B) {
 		task.Future.AddResult(*result)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := b.Context()
 
 	// Start workers
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		go func(id int) {
 			strategy.Worker(ctx, int64(id), executor, handler)
 		}(i)
@@ -924,8 +922,7 @@ func BenchmarkBitmaskStrategy_WorkerProcessing(b *testing.B) {
 	// Mark all workers as idle
 	strategy.idleMask.Store((1 << 8) - 1)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		_ = strategy.Submit(createSimpleTask(i, int64(i)))
 	}
 	b.StopTimer()

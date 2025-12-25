@@ -173,7 +173,7 @@ func TestWorkerPool_Shutdown(t *testing.T) {
 			defer pool.Shutdown(time.Second)
 
 			// Submit some tasks
-			for i := 0; i < 5; i++ {
+			for i := range 5 {
 				_, _ = pool.Submit(i)
 			}
 
@@ -208,7 +208,7 @@ func TestWorkerPool_Shutdown_GracefulWait(t *testing.T) {
 			// Submit tasks
 			numTasks := 10
 			futures := make([]*Future[int, int64], numTasks)
-			for i := 0; i < numTasks; i++ {
+			for i := range numTasks {
 				future, err := pool.Submit(i)
 				if err != nil {
 					t.Fatalf("failed to submit task %d: %v", i, err)
@@ -301,7 +301,7 @@ func TestWorkerPool_Shutdown_Timeout(t *testing.T) {
 			defer pool.Shutdown(time.Second)
 
 			// Submit tasks
-			for i := 0; i < 5; i++ {
+			for i := range 5 {
 				_, _ = pool.Submit(i)
 			}
 
@@ -337,7 +337,7 @@ func TestWorkerPool_Shutdown_InFlightTasks(t *testing.T) {
 		// Submit tasks
 		numTasks := 20
 		futures := make([]*Future[string, int64], numTasks)
-		for i := 0; i < numTasks; i++ {
+		for i := range numTasks {
 			future, err := pool.Submit(i)
 			if err != nil {
 				t.Fatalf("failed to submit task %d: %v", i, err)
@@ -434,7 +434,7 @@ func TestWorkerPool_Lifecycle_Integration(t *testing.T) {
 			numTasks := 50
 			futures := make([]*Future[int, int64], numTasks)
 
-			for i := 0; i < numTasks; i++ {
+			for i := range numTasks {
 				future, err := pool.Submit(i)
 				if err != nil {
 					t.Fatalf("submit task %d failed: %v", i, err)
@@ -499,7 +499,7 @@ func TestWorkerPool_Lifecycle_ContextCancellation(t *testing.T) {
 		// Submit tasks
 		numTasks := 10
 		futures := make([]*Future[int, int64], numTasks)
-		for i := 0; i < numTasks; i++ {
+		for i := range numTasks {
 			future, err := pool.Submit(i)
 			if err != nil {
 				t.Fatalf("submit task %d failed: %v", i, err)
