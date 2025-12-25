@@ -40,7 +40,6 @@ func main() {
 	}
 }
 
-// detectBenchmarkType detects which benchmark based on parent directory
 func detectBenchmarkType() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {

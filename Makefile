@@ -49,6 +49,7 @@ help:
 	@echo "  make fmt               - Format code with gofmt"
 	@echo "  make vet               - Run go vet"
 	@echo "  make gosec             - Run gosec security scanner"
+	@echo "  make modernize         - Modernize Go code to use latest patterns"
 	@echo "  make check             - Run fmt, vet, lint, and gosec"
 	@echo "  make pre-commit        - Run all checks and tests before committing"
 	@echo ""
@@ -212,6 +213,12 @@ gosec:
 		echo "$(RED)gosec not found. Install it with: go install github.com/securego/gosec/v2/cmd/gosec@latest$(NC)"; \
 		exit 1; \
 	fi
+
+## modernize: Modernize Go code to use latest patterns
+modernize:
+	@echo "$(BLUE)Modernizing Go code...$(NC)"
+	$(GO) run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@latest -fix ./...
+	@echo "$(GREEN)Code modernization complete!$(NC)"
 
 ## check: Run fmt, vet, lint, and gosec
 check: fmt vet lint gosec
