@@ -293,7 +293,7 @@ func BenchmarkStrategy_ConcurrentSubmission(b *testing.B) {
 					var firstErr error
 					wg.Add(numSubmitters)
 
-					for s := 0; s < numSubmitters; s++ {
+					for s := range numSubmitters {
 						startIdx := s * tasksPerSubmitter
 						endIdx := startIdx + tasksPerSubmitter
 						if s == numSubmitters-1 {
