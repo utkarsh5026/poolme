@@ -3,6 +3,7 @@ package runner
 import (
 	"flag"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"time"
 )
@@ -27,15 +28,17 @@ type BenchmarkRunner[T any, R any] interface {
 
 // CommonFlags holds common command-line flags
 type CommonFlags struct {
-	Workers      int
-	Tasks        int
-	Strategy     string
-	Iterations   int
-	Warmup       int
-	Workload     string
-	CPUProfile   string
-	MemProfile   string
-	OutputFormat string
+	Workers         int
+	Tasks           int
+	Strategy        string
+	Iterations      int
+	Warmup          int
+	Workload        string
+	CPUProfile      string
+	MemProfile      string
+	OutputFormat    string
+	ProfileAnalysis bool
+	TopN            int
 }
 
 // DefineCommonFlags defines common flags (but doesn't parse yet)
@@ -52,6 +55,8 @@ func DefineCommonFlags() *CommonFlags {
 	flag.StringVar(&flags.CPUProfile, "cpuprofile", "", "Write CPU profile to file")
 	flag.StringVar(&flags.MemProfile, "memprofile", "", "Write memory profile to file")
 	flag.StringVar(&flags.OutputFormat, "output-format", "table", "Output format: 'table' or 'json'")
+	flag.BoolVar(&flags.ProfileAnalysis, "profile-analysis", false, "Enable CPU profile analysis after benchmarks")
+	flag.IntVar(&flags.TopN, "top-n", 5, "Number of top functions to show in profile analysis")
 
 	return flags
 }
@@ -59,7 +64,8 @@ func DefineCommonFlags() *CommonFlags {
 // Run executes the complete benchmark suite
 // Flags should already be defined and parsed before calling this
 func (f *BenchmarkFramework[T, R]) Run(flags *CommonFlags) {
-	cleanup := SetupProfiling(flags.CPUProfile, flags.MemProfile)
+	silent := flags.OutputFormat == "json"
+	cleanup := setupProfilingSilent(flags.CPUProfile, flags.MemProfile, silent)
 	defer cleanup()
 
 	numWorkers := flags.Workers
@@ -74,13 +80,36 @@ func (f *BenchmarkFramework[T, R]) Run(flags *CommonFlags) {
 		f.PrintConfig(numWorkers, len(tasks), flags.Workload)
 	}
 
-	silent := flags.OutputFormat == "json"
 	strategies := GetStrategiesToRun(f.AllStrategies, flags.Strategy, flags.Iterations, flags.Warmup, silent)
 	results := f.runStrategies(strategies, tasks, numWorkers, flags)
 	if flags.OutputFormat == "json" {
 		_ = OutputJSON(f.Name, results)
 	} else {
 		f.PrintResults(results)
+	}
+
+	// Profile analysis phase - only run in parent process, not in subprocess mode
+	// Subprocess mode is when a specific strategy is selected
+	if flags.ProfileAnalysis && flags.CPUProfile != "" && flags.Strategy == "" {
+		profileDir := filepath.Dir(flags.CPUProfile)
+
+		if flags.OutputFormat != "json" {
+			fmt.Println()
+			colorPrintLn(Bold, "🔍 Starting CPU Profile Analysis...")
+			fmt.Println()
+		}
+
+		analysisResult, err := AnalyzeStrategies(profileDir, f.AllStrategies, flags.TopN)
+		if err != nil {
+			if flags.OutputFormat != "json" {
+				colorPrintf(Red, "⚠️  Profile analysis failed: %v\n", err)
+			}
+			return
+		}
+
+		if flags.OutputFormat != "json" {
+			renderProfileAnalysis(analysisResult)
+		}
 	}
 }
 

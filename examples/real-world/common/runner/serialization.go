@@ -25,7 +25,6 @@ func PopulateStringFields(results []StrategyResult) {
 
 // SerializeToJSON converts results to JSON bytes
 func SerializeToJSON(benchType string, results []StrategyResult) ([]byte, error) {
-	// Populate string representations
 	PopulateStringFields(results)
 
 	output := JSONBenchmarkOutput{

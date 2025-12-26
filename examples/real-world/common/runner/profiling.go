@@ -7,8 +7,14 @@ import (
 	"runtime/pprof"
 )
 
-// SetupProfiling sets up CPU and memory profiling, returns cleanup function
-func SetupProfiling(cpuProfile, memProfile string) func() {
+// setupProfiling sets up CPU and memory profiling, returns cleanup function
+// Silent mode suppresses informational messages (used in subprocess mode)
+func setupProfiling(cpuProfile, memProfile string) func() {
+	return setupProfilingSilent(cpuProfile, memProfile, false)
+}
+
+// setupProfilingSilent sets up profiling with optional silent mode
+func setupProfilingSilent(cpuProfile, memProfile string, silent bool) func() {
 	cleanups := make([]func(), 0, 2)
 
 	if cpuProfile != "" {
@@ -24,7 +30,9 @@ func SetupProfiling(cpuProfile, memProfile string) func() {
 			os.Exit(1)
 		}
 
-		fmt.Printf("CPU profiling enabled, writing to: %s\n", cpuProfile)
+		if !silent {
+			fmt.Fprintf(os.Stderr, "CPU profiling enabled, writing to: %s\n", cpuProfile)
+		}
 
 		cleanups = append(cleanups, func() {
 			pprof.StopCPUProfile()
@@ -50,7 +58,9 @@ func SetupProfiling(cpuProfile, memProfile string) func() {
 			if err := pprof.WriteHeapProfile(f); err != nil {
 				colorPrintf(Red, "Error writing memory profile: %v\n", err)
 			}
-			fmt.Printf("Memory profile written to: %s\n", memProfile)
+			if !silent {
+				fmt.Fprintf(os.Stderr, "Memory profile written to: %s\n", memProfile)
+			}
 		})
 	}
 
