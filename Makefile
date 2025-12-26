@@ -40,6 +40,9 @@ help:
 	@echo "  make bench             - Run all benchmarks"
 	@echo "  make bench-compare     - Run benchmarks and save results for comparison"
 	@echo ""
+	@echo "$(GREEN)Profiling:$(NC)"
+	@echo "  make print-profile     - Run CPU benchmark with profile analysis (top 5 functions)"
+	@echo ""
 	@echo "$(GREEN)Building:$(NC)"
 	@echo "  make build             - Build the project"
 	@echo "  make install           - Install dependencies"
@@ -299,6 +302,23 @@ bench-small-pool:
 	@echo "$(YELLOW)📊 Workload: 500K tasks with only 4 workers (low contention test)$(NC)"
 	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=500000 -complexity=5000 -workload=balanced -workers=4
 	@echo ""
+
+## print-profile: Run CPU benchmark with profiling and analysis
+print-profile:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  CPU Benchmark with Profile Analysis                      ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Running balanced workload with profiling enabled...$(NC)"
+	@cd examples/real-world/bench/runner && \
+		$(GO) run runner.go \
+		-tasks=100000 \
+		-workload=balanced \
+		-cpuprofile=profiles/{strategy}_cpu.prof \
+		-profile-analysis \
+		-top-n=5
+	@echo ""
+	@echo "$(GREEN)✅ Profile analysis complete!$(NC)"
 
 ## bench-all: Run all 5 benchmark scenarios sequentially
 bench-all:
