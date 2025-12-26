@@ -1,4 +1,4 @@
-.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet gosec pre-commit install bench-uniform bench-skewed bench-priority bench-burst bench-small-pool bench-all bench-io-api bench-io-database bench-io-file bench-io-mixed bench-io-all bench-pipeline-etl bench-pipeline-streaming bench-pipeline-batch bench-pipeline-all bench-comprehensive
+.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean clean-all lint fmt vet gosec pre-commit install bench-uniform bench-skewed bench-priority bench-burst bench-small-pool bench-all bench-io-api bench-io-database bench-io-file bench-io-mixed bench-io-all bench-pipeline-etl bench-pipeline-streaming bench-pipeline-batch bench-pipeline-all bench-comprehensive
 
 # Variables
 BINARY_NAME=poolme
@@ -82,6 +82,7 @@ help:
 	@echo ""
 	@echo "$(GREEN)Utilities:$(NC)"
 	@echo "  make clean             - Clean build artifacts and test cache"
+	@echo "  make clean-all         - Remove ALL gitignored files (binaries, profiles, coverage, etc.)"
 	@echo "  make tidy              - Tidy go modules"
 	@echo ""
 
@@ -241,6 +242,48 @@ clean:
 	rm -f coverage.out coverage.html
 	rm -f benchmark_results.txt
 	@echo "$(GREEN)Clean complete!$(NC)"
+
+## clean-all: Remove all gitignored files (binaries, profiles, coverage, etc.)
+clean-all:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  Cleaning all gitignored files...                         ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing binary files...$(NC)"
+	@find . -type f \( -name "*.exe" -o -name "*.exe~" -o -name "*.dll" -o -name "*.so" -o -name "*.dylib" \) -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing test binaries...$(NC)"
+	@find . -type f -name "*.test" -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing coverage files...$(NC)"
+	@find . -type f \( -name "*.out" -o -name "coverage.*" -o -name "*.coverprofile" -o -name "profile.cov" \) -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing profile files...$(NC)"
+	@find . -type f -name "*.prof" -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing text files (except requirements.txt)...$(NC)"
+	@find . -type f -name "*.txt" ! -name "requirements.txt" -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing .env files...$(NC)"
+	@find . -type f -name ".env" -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing benchmark-data/ directory...$(NC)"
+	@if [ -d "benchmark-data" ]; then \
+		echo "  Deleting: benchmark-data/"; \
+		rm -rf benchmark-data; \
+	fi
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing profiles/ directory...$(NC)"
+	@if [ -d "profiles" ]; then \
+		echo "  Deleting: profiles/"; \
+		rm -rf profiles; \
+	fi
+	@echo ""
+	@$(GO) clean
+	@$(GO) clean -testcache
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║  ✅ Clean complete! All gitignored files removed.          ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
 
 ## tidy: Tidy go modules
 tidy:
