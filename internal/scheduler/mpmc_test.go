@@ -108,7 +108,7 @@ func TestMPMCQueue_EnqueueDequeueMultiple(t *testing.T) {
 
 	// Enqueue multiple items
 	numItems := 10
-	for i := 0; i < numItems; i++ {
+	for i := range numItems {
 		err := q.Enqueue(i)
 		if err != nil {
 			t.Fatalf("Enqueue(%d) failed: %v", i, err)
@@ -120,7 +120,7 @@ func TestMPMCQueue_EnqueueDequeueMultiple(t *testing.T) {
 	}
 
 	// Dequeue all items in order
-	for i := 0; i < numItems; i++ {
+	for i := range numItems {
 		val, err := q.Dequeue()
 		if err != nil {
 			t.Fatalf("Dequeue failed: %v", err)
@@ -141,7 +141,7 @@ func TestMPMCQueue_BoundedQueueFull(t *testing.T) {
 	q := newMPMCQueue[int](capacity, true)
 
 	// Fill the queue
-	for i := 0; i < capacity; i++ {
+	for i := range capacity {
 		err := q.Enqueue(i)
 		if err != nil {
 			t.Fatalf("Enqueue(%d) failed: %v", i, err)
@@ -195,7 +195,7 @@ func TestMPMCQueue_UnboundedQueueGrowth(t *testing.T) {
 	var mu sync.Mutex
 	go func() {
 		defer wg.Done()
-		for i := 0; i < numItems; i++ {
+		for i := range numItems {
 			val, err := q.Dequeue()
 			if err != nil {
 				t.Errorf("Dequeue failed at %d: %v", i, err)
@@ -317,7 +317,7 @@ func TestMPMCQueue_ConcurrentEnqueueDequeue(t *testing.T) {
 
 	// Start consumers
 	wg.Add(numConsumers)
-	for c := 0; c < numConsumers; c++ {
+	for range numConsumers {
 		go func() {
 			defer wg.Done()
 			for {
@@ -335,10 +335,10 @@ func TestMPMCQueue_ConcurrentEnqueueDequeue(t *testing.T) {
 	// Start producers
 	var producerWg sync.WaitGroup
 	producerWg.Add(numProducers)
-	for p := 0; p < numProducers; p++ {
+	for p := range numProducers {
 		go func(producerID int) {
 			defer producerWg.Done()
-			for i := 0; i < itemsPerProducer; i++ {
+			for i := range itemsPerProducer {
 				q.Enqueue(producerID*itemsPerProducer + i)
 			}
 		}(p)
@@ -478,7 +478,7 @@ func TestMPMCStrategy_SubmitBatch(t *testing.T) {
 	// Create batch of tasks
 	batchSize := 20
 	tasks := make([]*types.SubmittedTask[int, int], batchSize)
-	for i := 0; i < batchSize; i++ {
+	for i := range batchSize {
 		future := types.NewFuture[int, int64]()
 		tasks[i] = types.NewSubmittedTask(i, int64(i), future)
 	}
@@ -533,7 +533,7 @@ func TestMPMCStrategy_SubmitBatchAfterShutdown(t *testing.T) {
 
 	// Create batch
 	tasks := make([]*types.SubmittedTask[int, int], 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		future := types.NewFuture[int, int64]()
 		tasks[i] = types.NewSubmittedTask(i, int64(i), future)
 	}
@@ -587,7 +587,7 @@ func TestMPMCStrategy_Worker(t *testing.T) {
 
 	// Submit tasks
 	numTasks := 10
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.Submit(task)
@@ -618,7 +618,7 @@ func TestMPMCStrategy_Worker(t *testing.T) {
 
 	// Verify the results are correct (doubled values)
 	expectedResults := make(map[int]bool)
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		expectedResults[i*2] = true
 	}
 	for _, result := range results {
@@ -754,7 +754,7 @@ func TestMPMCStrategy_MultipleWorkers(t *testing.T) {
 	// Start workers
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
-	for i := 0; i < numWorkers; i++ {
+	for i := range numWorkers {
 		workerID := int64(i)
 		go func(id int64) {
 			defer wg.Done()
@@ -764,7 +764,7 @@ func TestMPMCStrategy_MultipleWorkers(t *testing.T) {
 
 	// Submit many tasks
 	numTasks := 100
-	for i := 0; i < numTasks; i++ {
+	for i := range numTasks {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.Submit(task)
@@ -837,10 +837,10 @@ func TestMPMCStrategy_ConcurrentSubmit(t *testing.T) {
 	var submitErrors atomic.Int32
 
 	submitWg.Add(numGoroutines)
-	for g := 0; g < numGoroutines; g++ {
+	for g := range numGoroutines {
 		go func(gid int) {
 			defer submitWg.Done()
-			for i := 0; i < tasksPerGoroutine; i++ {
+			for i := range tasksPerGoroutine {
 				taskID := int64(gid*tasksPerGoroutine + i)
 				future := types.NewFuture[int, int64]()
 				task := types.NewSubmittedTask(int(taskID), taskID, future)
@@ -885,7 +885,7 @@ func TestMPMCStrategy_BoundedQueueFull(t *testing.T) {
 	defer s.Shutdown()
 
 	// Fill the queue
-	for i := 0; i < capacity; i++ {
+	for i := range capacity {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		err := s.Submit(task)
@@ -913,7 +913,7 @@ func TestMPMCStrategy_Shutdown(t *testing.T) {
 	s := newMPMCStrategy(conf, false, 32)
 
 	// Submit some tasks
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.Submit(task)
@@ -974,7 +974,7 @@ func TestMPMCStrategy_WorkerContextCancellation(t *testing.T) {
 	}()
 
 	// Submit some tasks
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		future := types.NewFuture[int, int64]()
 		task := types.NewSubmittedTask(i, int64(i), future)
 		s.Submit(task)

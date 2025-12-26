@@ -261,7 +261,7 @@ func percentile(latencies []time.Duration, p float64) time.Duration {
 	copy(sorted, latencies)
 
 	// Simple bubble sort (fine for benchmark data)
-	for i := 0; i < len(sorted); i++ {
+	for i := range sorted {
 		for j := i + 1; j < len(sorted); j++ {
 			if sorted[i] > sorted[j] {
 				sorted[i], sorted[j] = sorted[j], sorted[i]
@@ -271,10 +271,7 @@ func percentile(latencies []time.Duration, p float64) time.Duration {
 
 	// Calculate index using the nearest-rank method
 	// For p=0.50 with 100 elements, we want the 50th element (index 49)
-	index := int(math.Round(p * float64(len(sorted)-1)))
-	if index < 0 {
-		index = 0
-	}
+	index := max(int(math.Round(p*float64(len(sorted)-1))), 0)
 	if index >= len(sorted) {
 		index = len(sorted) - 1
 	}

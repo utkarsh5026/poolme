@@ -86,7 +86,7 @@ func TestSkipList_Push(t *testing.T) {
 		sl := newSkipList[intTask, int](lessFuncInt)
 
 		// Push multiple tasks with same priority
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			sl.Push(createPriorityTask(i, 5, int64(i)))
 		}
 
@@ -96,7 +96,7 @@ func TestSkipList_Push(t *testing.T) {
 		}
 
 		// Pop all tasks - they should all have priority 5
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			task := sl.Pop()
 			if task == nil {
 				t.Fatalf("unexpected nil task at iteration %d", i)
@@ -112,7 +112,7 @@ func TestSkipList_Push(t *testing.T) {
 		initialLevel := atomic.LoadInt32(&sl.level)
 
 		// Push many tasks to likely trigger level increase
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			sl.Push(createPriorityTask(i, i, int64(i)))
 		}
 
@@ -136,7 +136,7 @@ func TestSkipList_Pop(t *testing.T) {
 
 		// Pop all tasks and verify they come out in sorted order
 		var lastPriority int
-		for i := 0; i < len(priorities); i++ {
+		for i := range priorities {
 			task := sl.Pop()
 			if task == nil {
 				t.Fatalf("unexpected nil task at iteration %d", i)
@@ -181,12 +181,12 @@ func TestSkipList_Pop(t *testing.T) {
 		sl := newSkipList[intTask, int](lessFuncInt)
 
 		// Push tasks with same priority (they should be in same node)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			sl.Push(createPriorityTask(i, 5, int64(i)))
 		}
 
 		// Pop all tasks
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			task := sl.Pop()
 			if task == nil {
 				t.Fatalf("unexpected nil task at iteration %d", i)
@@ -231,7 +231,7 @@ func TestSkipList_RandomLevel(t *testing.T) {
 
 		// Generate many random levels
 		levels := make(map[int]int)
-		for i := 0; i < 1000; i++ {
+		for range 1000 {
 			level := sl.randomLevel()
 			if level < 1 || level > defaultMaxLevel {
 				t.Errorf("invalid level generated: %d (expected 1-%d)", level, defaultMaxLevel)
@@ -249,7 +249,7 @@ func TestSkipList_RandomLevel(t *testing.T) {
 		sl := newSkipList[intTask, int](lessFuncInt)
 
 		levels := make(map[int]int)
-		for i := 0; i < 10000; i++ {
+		for range 10000 {
 			levels[sl.randomLevel()]++
 		}
 
@@ -290,14 +290,14 @@ func TestSkipList_RemoveNode(t *testing.T) {
 		sl := newSkipList[intTask, int](lessFuncInt)
 
 		// Push many tasks to create multi-level structure
-		for i := 0; i < 50; i++ {
+		for i := range 50 {
 			sl.Push(createPriorityTask(i, i, int64(i)))
 		}
 
 		initialLevel := atomic.LoadInt32(&sl.level)
 
 		// Pop all tasks
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			sl.Pop()
 		}
 
@@ -595,7 +595,7 @@ func TestSlStrategy_Worker(t *testing.T) {
 		strategy := newSlStrategy(conf, nil)
 
 		// Submit tasks first, before starting the worker
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			strategy.Submit(createPriorityTask(i, i, int64(i)))
 		}
 
@@ -655,7 +655,7 @@ func TestSlStrategy_Worker(t *testing.T) {
 
 		// Submit many tasks
 		taskCount := 50
-		for i := 0; i < taskCount; i++ {
+		for i := range taskCount {
 			strategy.Submit(createPriorityTask(i, i%10, int64(i)))
 		}
 
@@ -683,7 +683,7 @@ func TestSlStrategy_Worker(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(workerCount)
 
-		for i := 0; i < workerCount; i++ {
+		for i := range workerCount {
 			go func(id int) {
 				defer wg.Done()
 				strategy.Worker(ctx, int64(id), executor, handler)
@@ -772,7 +772,7 @@ func TestSlStrategy_Drain(t *testing.T) {
 
 		// Submit tasks
 		taskCount := 5
-		for i := 0; i < taskCount; i++ {
+		for i := range taskCount {
 			strategy.Submit(createPriorityTask(i, i, int64(i)))
 		}
 
@@ -818,10 +818,10 @@ func TestSlStrategy_Concurrency(t *testing.T) {
 		wg.Add(goroutines)
 
 		// Submit tasks concurrently
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(start int) {
 				defer wg.Done()
-				for j := 0; j < tasksPerGoroutine; j++ {
+				for j := range tasksPerGoroutine {
 					priority := (start*tasksPerGoroutine + j) % 100
 					strategy.Submit(createPriorityTask(start*tasksPerGoroutine+j, priority, int64(start*tasksPerGoroutine+j)))
 				}
@@ -866,7 +866,7 @@ func TestSlStrategy_Concurrency(t *testing.T) {
 		}
 
 		workerWg.Add(workerCount)
-		for i := 0; i < workerCount; i++ {
+		for i := range workerCount {
 			go func(id int) {
 				defer workerWg.Done()
 				strategy.Worker(ctx, int64(id), executor, handler)
@@ -878,10 +878,10 @@ func TestSlStrategy_Concurrency(t *testing.T) {
 		tasksPerSubmitter := 40
 		submitWg.Add(submitters)
 
-		for i := 0; i < submitters; i++ {
+		for i := range submitters {
 			go func(start int) {
 				defer submitWg.Done()
-				for j := 0; j < tasksPerSubmitter; j++ {
+				for j := range tasksPerSubmitter {
 					priority := (start*tasksPerSubmitter + j) % 50
 					strategy.Submit(createPriorityTask(start*tasksPerSubmitter+j, priority, int64(start*tasksPerSubmitter+j)))
 					time.Sleep(1 * time.Millisecond)
@@ -985,8 +985,7 @@ func BenchmarkSkipList_Push(b *testing.B) {
 	sl := newSkipList[intTask, int](lessFuncInt)
 	task := createPriorityTask(1, 5, 1)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sl.Push(task)
 	}
 }
@@ -1008,8 +1007,7 @@ func BenchmarkSkipList_Pop(b *testing.B) {
 func BenchmarkSkipList_PushPop(b *testing.B) {
 	sl := newSkipList[intTask, int](lessFuncInt)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		sl.Push(createPriorityTask(i, i%1000, int64(i)))
 		if i%2 == 0 {
 			sl.Pop()
@@ -1021,8 +1019,7 @@ func BenchmarkSkipList_Concurrent(b *testing.B) {
 	sl := newSkipList[intTask, int](lessFuncInt)
 	var wg sync.WaitGroup
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		wg.Add(2)
 		go func(val int) {
 			defer wg.Done()

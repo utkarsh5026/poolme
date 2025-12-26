@@ -488,14 +488,13 @@ func BenchmarkWorkerPool_Process(b *testing.B) {
 	processFn := func(ctx context.Context, task int) (int, error) {
 		// Simulate some work
 		sum := 0
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			sum += i
 		}
 		return task * 2, nil
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := pool.Process(context.Background(), tasks, processFn)
 		if err != nil {
 			b.Fatalf("unexpected error: %v", err)
@@ -507,20 +506,19 @@ func BenchmarkWorkerPool_ProcessMap(b *testing.B) {
 	pool := NewWorkerPool[int, int](WithWorkerCount(8))
 
 	tasks := make(map[string]int, 1000)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		tasks[fmt.Sprintf("key_%d", i)] = i
 	}
 
 	processFn := func(ctx context.Context, task int) (int, error) {
 		sum := 0
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			sum += i
 		}
 		return task * 2, nil
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := pool.ProcessMap(context.Background(), tasks, processFn)
 		if err != nil {
 			b.Fatalf("unexpected error: %v", err)

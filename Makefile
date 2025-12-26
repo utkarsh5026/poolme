@@ -1,4 +1,4 @@
-.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean lint fmt vet gosec pre-commit install bench-uniform bench-skewed bench-priority bench-burst bench-small-pool bench-all bench-io-api bench-io-database bench-io-file bench-io-mixed bench-io-all bench-pipeline-etl bench-pipeline-streaming bench-pipeline-batch bench-pipeline-all bench-comprehensive
+.PHONY: help test test-race test-verbose test-short test-cover stress stress-race stress-all bench build clean clean-all lint fmt vet gosec pre-commit install bench-uniform bench-skewed bench-priority bench-burst bench-small-pool bench-all bench-io-api bench-io-database bench-io-file bench-io-mixed bench-io-all bench-pipeline-etl bench-pipeline-streaming bench-pipeline-batch bench-pipeline-all bench-comprehensive
 
 # Variables
 BINARY_NAME=poolme
@@ -40,6 +40,9 @@ help:
 	@echo "  make bench             - Run all benchmarks"
 	@echo "  make bench-compare     - Run benchmarks and save results for comparison"
 	@echo ""
+	@echo "$(GREEN)Profiling:$(NC)"
+	@echo "  make print-profile     - Run CPU benchmark with profile analysis (top 5 functions)"
+	@echo ""
 	@echo "$(GREEN)Building:$(NC)"
 	@echo "  make build             - Build the project"
 	@echo "  make install           - Install dependencies"
@@ -49,6 +52,7 @@ help:
 	@echo "  make fmt               - Format code with gofmt"
 	@echo "  make vet               - Run go vet"
 	@echo "  make gosec             - Run gosec security scanner"
+	@echo "  make modernize         - Modernize Go code to use latest patterns"
 	@echo "  make check             - Run fmt, vet, lint, and gosec"
 	@echo "  make pre-commit        - Run all checks and tests before committing"
 	@echo ""
@@ -78,6 +82,7 @@ help:
 	@echo ""
 	@echo "$(GREEN)Utilities:$(NC)"
 	@echo "  make clean             - Clean build artifacts and test cache"
+	@echo "  make clean-all         - Remove ALL gitignored files (binaries, profiles, coverage, etc.)"
 	@echo "  make tidy              - Tidy go modules"
 	@echo ""
 
@@ -213,6 +218,12 @@ gosec:
 		exit 1; \
 	fi
 
+## modernize: Modernize Go code to use latest patterns
+modernize:
+	@echo "$(BLUE)Modernizing Go code...$(NC)"
+	$(GO) run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@latest -fix ./...
+	@echo "$(GREEN)Code modernization complete!$(NC)"
+
 ## check: Run fmt, vet, lint, and gosec
 check: fmt vet lint gosec
 	@echo "$(GREEN)All checks passed!$(NC)"
@@ -231,6 +242,48 @@ clean:
 	rm -f coverage.out coverage.html
 	rm -f benchmark_results.txt
 	@echo "$(GREEN)Clean complete!$(NC)"
+
+## clean-all: Remove all gitignored files (binaries, profiles, coverage, etc.)
+clean-all:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  Cleaning all gitignored files...                         ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing binary files...$(NC)"
+	@find . -type f \( -name "*.exe" -o -name "*.exe~" -o -name "*.dll" -o -name "*.so" -o -name "*.dylib" \) -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing test binaries...$(NC)"
+	@find . -type f -name "*.test" -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing coverage files...$(NC)"
+	@find . -type f \( -name "*.out" -o -name "coverage.*" -o -name "*.coverprofile" -o -name "profile.cov" \) -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing profile files...$(NC)"
+	@find . -type f -name "*.prof" -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing text files (except requirements.txt)...$(NC)"
+	@find . -type f -name "*.txt" ! -name "requirements.txt" -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing .env files...$(NC)"
+	@find . -type f -name ".env" -print -delete 2>/dev/null || true
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing benchmark-data/ directory...$(NC)"
+	@if [ -d "benchmark-data" ]; then \
+		echo "  Deleting: benchmark-data/"; \
+		rm -rf benchmark-data; \
+	fi
+	@echo ""
+	@echo "$(YELLOW)🗑️  Removing profiles/ directory...$(NC)"
+	@if [ -d "profiles" ]; then \
+		echo "  Deleting: profiles/"; \
+		rm -rf profiles; \
+	fi
+	@echo ""
+	@$(GO) clean
+	@$(GO) clean -testcache
+	@echo "$(GREEN)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║  ✅ Clean complete! All gitignored files removed.          ║$(NC)"
+	@echo "$(GREEN)╚════════════════════════════════════════════════════════════╝$(NC)"
 
 ## tidy: Tidy go modules
 tidy:
@@ -292,6 +345,23 @@ bench-small-pool:
 	@echo "$(YELLOW)📊 Workload: 500K tasks with only 4 workers (low contention test)$(NC)"
 	@cd examples/real-world/bench/runner && $(GO) run runner.go -tasks=500000 -complexity=5000 -workload=balanced -workers=4
 	@echo ""
+
+## print-profile: Run CPU benchmark with profiling and analysis
+print-profile:
+	@echo "$(BLUE)╔════════════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║  CPU Benchmark with Profile Analysis                      ║$(NC)"
+	@echo "$(BLUE)╚════════════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)📊 Running balanced workload with profiling enabled...$(NC)"
+	@cd examples/real-world/bench/runner && \
+		$(GO) run runner.go \
+		-tasks=100000 \
+		-workload=balanced \
+		-cpuprofile=profiles/{strategy}_cpu.prof \
+		-profile-analysis \
+		-top-n=5
+	@echo ""
+	@echo "$(GREEN)✅ Profile analysis complete!$(NC)"
 
 ## bench-all: Run all 5 benchmark scenarios sequentially
 bench-all:

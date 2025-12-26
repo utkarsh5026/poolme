@@ -125,7 +125,7 @@ func TestFusionStrategy_Submit_BatchSize(t *testing.T) {
 		fs := newFusionStrategy(conf, underlying)
 
 		// Submit 5 tasks (should create 2 full batches + 1 partial)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			fs.Submit(createTestTask[int, int](i, int64(i)))
 		}
 

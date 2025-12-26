@@ -17,8 +17,7 @@ func (c *CPUBenchmark) RenderResults(results []RunResult) {
 	}
 	fastestTime := successRes[0].TotalTime
 
-	// Throughput table
-	printSectionHeader("📊 THROUGHPUT COMPARISON",
+	printSectionHeader("THROUGHPUT COMPARISON",
 		"How many tasks per second each scheduler can process")
 
 	throughputTable := tablewriter.NewWriter(os.Stdout)
@@ -73,7 +72,7 @@ func (i *IOBenchmark) RenderResults(results []RunResult) {
 	}
 	fastestTime := successfulResults[0].TotalTime
 
-	printSectionHeader("📊 I/O BENCHMARK RESULTS (Isolated Strategy Runs)")
+	printSectionHeader("I/O BENCHMARK RESULTS (Isolated Strategy Runs)")
 
 	table := tablewriter.NewWriter(os.Stdout)
 	table.Header("Rank", "Strategy", "Time", "Tasks/sec", "Avg Latency", "P95", "P99", "vs Fastest")
@@ -103,7 +102,7 @@ func (p *PipelineBenchmark) RenderResults(results []RunResult) {
 	}
 	fastestTime := successfulResults[0].TotalTime
 
-	printSectionHeader("📊 PIPELINE BENCHMARK RESULTS (Isolated Strategy Runs)")
+	printSectionHeader("PIPELINE BENCHMARK RESULTS (Isolated Strategy Runs)")
 
 	table := tablewriter.NewWriter(os.Stdout)
 	table.Header("Rank", "Strategy", "Time", "Tasks/sec", "MB/sec", "Avg Latency", "P95", "P99", "vs Fastest")
@@ -201,10 +200,8 @@ func getSuccessfulResults(results []RunResult) ([]RunResult, error) {
 		return successfulResults[i].TotalTime < successfulResults[j].TotalTime
 	})
 
-	// Assign ranks
 	for i := range successfulResults {
 		successfulResults[i].Rank = i + 1
 	}
-
 	return successfulResults, nil
 }

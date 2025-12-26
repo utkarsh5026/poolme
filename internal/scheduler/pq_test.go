@@ -221,7 +221,7 @@ func TestPriorityQueue_HeapInvariant(t *testing.T) {
 // isValidHeap checks if the heap property is maintained.
 func isValidHeap[T any, R any](pq *priorityQueue[T, R]) bool {
 	n := pq.Len()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		left := 2*i + 1
 		right := 2*i + 2
 
@@ -485,7 +485,7 @@ func TestPriorityQueueStrategy_Worker(t *testing.T) {
 		strategy := newPriorityQueueStrategy(conf, nil)
 
 		// Submit tasks first, before starting the worker
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			strategy.Submit(createPriorityTask(i, i, int64(i)))
 		}
 
@@ -546,7 +546,7 @@ func TestPriorityQueueStrategy_Worker(t *testing.T) {
 
 		// Submit many tasks
 		taskCount := 50
-		for i := 0; i < taskCount; i++ {
+		for i := range taskCount {
 			strategy.Submit(createPriorityTask(i, i%10, int64(i)))
 		}
 
@@ -574,7 +574,7 @@ func TestPriorityQueueStrategy_Worker(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(workerCount)
 
-		for i := 0; i < workerCount; i++ {
+		for i := range workerCount {
 			go func(id int) {
 				defer wg.Done()
 				strategy.Worker(ctx, int64(id), executor, handler)
@@ -663,7 +663,7 @@ func TestPriorityQueueStrategy_Drain(t *testing.T) {
 
 		// Submit tasks
 		taskCount := 5
-		for i := 0; i < taskCount; i++ {
+		for i := range taskCount {
 			strategy.Submit(createPriorityTask(i, i, int64(i)))
 		}
 
@@ -711,10 +711,10 @@ func TestPriorityQueueStrategy_Concurrency(t *testing.T) {
 		wg.Add(goroutines)
 
 		// Submit tasks concurrently
-		for i := 0; i < goroutines; i++ {
+		for i := range goroutines {
 			go func(start int) {
 				defer wg.Done()
-				for j := 0; j < tasksPerGoroutine; j++ {
+				for j := range tasksPerGoroutine {
 					priority := (start*tasksPerGoroutine + j) % 100
 					strategy.Submit(createPriorityTask(start*tasksPerGoroutine+j, priority, int64(start*tasksPerGoroutine+j)))
 				}
@@ -769,7 +769,7 @@ func TestPriorityQueueStrategy_Concurrency(t *testing.T) {
 		}
 
 		workerWg.Add(workerCount)
-		for i := 0; i < workerCount; i++ {
+		for i := range workerCount {
 			go func(id int) {
 				defer workerWg.Done()
 				strategy.Worker(ctx, int64(id), executor, handler)
@@ -781,10 +781,10 @@ func TestPriorityQueueStrategy_Concurrency(t *testing.T) {
 		tasksPerSubmitter := 40
 		submitWg.Add(submitters)
 
-		for i := 0; i < submitters; i++ {
+		for i := range submitters {
 			go func(start int) {
 				defer submitWg.Done()
-				for j := 0; j < tasksPerSubmitter; j++ {
+				for j := range tasksPerSubmitter {
 					priority := (start*tasksPerSubmitter + j) % 50
 					strategy.Submit(createPriorityTask(start*tasksPerSubmitter+j, priority, int64(start*tasksPerSubmitter+j)))
 					time.Sleep(1 * time.Millisecond)
@@ -888,8 +888,7 @@ func BenchmarkPriorityQueue_Push(b *testing.B) {
 	pq := newPriorityQueue([]*types.SubmittedTask[intTask, int]{}, lessFuncInt)
 	task := createPriorityTask(1, 5, 1)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		heap.Push(pq, task)
 	}
 }

@@ -33,12 +33,16 @@ func parseJSONOutput(output string) (RunResult, error) {
 }
 
 type CPUBenchmark struct {
-	tasksFlag      *int
-	workersFlag    *int
-	complexityFlag *int
-	workloadFlag   *string
-	iterationsFlag *int
-	warmupFlag     *int
+	tasksFlag           *int
+	workersFlag         *int
+	complexityFlag      *int
+	workloadFlag        *string
+	iterationsFlag      *int
+	warmupFlag          *int
+	cpuProfileFlag      *string
+	memProfileFlag      *string
+	profileAnalysisFlag *bool
+	topNFlag            *int
 }
 
 func (c *CPUBenchmark) GetName() string {
@@ -60,16 +64,36 @@ func (c *CPUBenchmark) ParseFlags() ([]string, error) {
 	c.workloadFlag = flag.String("workload", "balanced", "Workload mode: 'balanced', 'imbalanced', or 'priority'")
 	c.iterationsFlag = flag.Int("iterations", 1, "Number of iterations per strategy")
 	c.warmupFlag = flag.Int("warmup", 0, "Number of warmup iterations")
+	c.cpuProfileFlag = flag.String("cpuprofile", "", "Write CPU profile to file")
+	c.memProfileFlag = flag.String("memprofile", "", "Write memory profile to file")
+	c.profileAnalysisFlag = flag.Bool("profile-analysis", false, "Enable CPU profile analysis")
+	c.topNFlag = flag.Int("top-n", 5, "Number of top functions to show")
 	flag.Parse()
 
-	return []string{
+	args := []string{
 		fmt.Sprintf("-tasks=%d", *c.tasksFlag),
 		fmt.Sprintf("-workers=%d", *c.workersFlag),
 		fmt.Sprintf("-complexity=%d", *c.complexityFlag),
 		fmt.Sprintf("-workload=%s", *c.workloadFlag),
 		fmt.Sprintf("-iterations=%d", *c.iterationsFlag),
 		fmt.Sprintf("-warmup=%d", *c.warmupFlag),
-	}, nil
+	}
+
+	// Add profiling flags if specified
+	if *c.cpuProfileFlag != "" {
+		args = append(args, fmt.Sprintf("-cpuprofile=%s", *c.cpuProfileFlag))
+	}
+	if *c.memProfileFlag != "" {
+		args = append(args, fmt.Sprintf("-memprofile=%s", *c.memProfileFlag))
+	}
+	if *c.profileAnalysisFlag {
+		args = append(args, fmt.Sprintf("-profile-analysis=%v", *c.profileAnalysisFlag))
+	}
+	if *c.topNFlag != 5 {
+		args = append(args, fmt.Sprintf("-top-n=%d", *c.topNFlag))
+	}
+
+	return args, nil
 }
 
 func (c *CPUBenchmark) ParseOutput(output string) (RunResult, error) {
@@ -142,7 +166,7 @@ func (i *IOBenchmark) ParseOutput(output string) (RunResult, error) {
 }
 
 func (i *IOBenchmark) PrintConfiguration() {
-	Blue.Println("⚙️  Configuration:")
+	_, _ = Blue.Println("⚙️  Configuration:")
 	fmt.Printf("  Workers:          %d", *i.workersFlag)
 	if *i.workersFlag == 0 {
 		fmt.Printf(" (auto-detect, using %d CPU cores)\n", runtime.NumCPU())
