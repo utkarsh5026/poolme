@@ -9,7 +9,7 @@ require golang.org/x/time v0.14.0
 require (
 	github.com/fatih/color v1.18.0
 	github.com/olekukonko/tablewriter v1.1.3
-	golang.org/x/sys v0.40.0
+	golang.org/x/sys v0.41.0
 )
 
 require (
